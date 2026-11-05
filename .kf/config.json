@@ -1,0 +1,13 @@
+{
+  "schema": "kanban-flow",
+  "defaultContext": "app",
+  "stacks": [],
+  "reviewer": "phuthuycoding",
+  "agents": [
+    "claude"
+  ],
+  "skills": {
+    "scope": "global"
+  },
+  "created": "20261105_1825"
+}

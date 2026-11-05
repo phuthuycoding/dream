@@ -1,0 +1,8 @@
+/target
+/works
+.works/
+node_modules/
+/playwright-report
+/e2e/test-results
+.DS_Store
+*.log
