@@ -33,7 +33,7 @@ fn uid() -> anyhow::Result<String> {
     let out = Command::new("/usr/bin/id")
         .arg("-u")
         .output()
-        .or_else(|_| Command::new("id").arg("-u").output())?;
+        .context("cannot run /usr/bin/id")?;
     if !out.status.success() {
         return Err(anyhow!("`id -u` failed"));
     }
@@ -91,14 +91,14 @@ fn systemctl(args: &[&str]) -> anyhow::Result<()> {
 
 fn systemd_unit(program_args: &[String]) -> anyhow::Result<String> {
     for a in program_args {
-        if a.chars().any(|c| c == '\n' || c == '\r' || (c.is_control() && c != '\t')) {
+        if a.chars().any(|c| c.is_control()) {
             return Err(anyhow!("argument contains a control character — refusing to write the unit"));
         }
     }
     let exec = program_args
         .iter()
-        // systemd expands % specifiers regardless of quoting — %% escapes.
-        .map(|a| a.replace('%', "%%"))
+        // systemd expands % specifiers and $ env vars regardless of quoting.
+        .map(|a| a.replace('%', "%%").replace('$', "$$").replace('\\', "\\\\"))
         .map(|a| shell_quote(&a))
         .collect::<Vec<_>>()
         .join(" ");
@@ -176,16 +176,22 @@ fn launchctl(args: &[&str]) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// The service daemon's credential — only the token FILE counts; a CLI
+/// `--auth-token` override is never stored in the unit, so the service
+/// would reject it.
+fn read_service_token(cfg: &Config) -> Option<String> {
+    fs::read_to_string(cfg.data_dir.join("token"))
+        .ok()
+        .map(|t| t.trim().to_string())
+        .filter(|t| !t.is_empty())
+        .filter(|t| t.chars().all(|c| c.is_ascii_alphanumeric() || "-_.".contains(c)))
+}
+
 fn read_token(cfg: &Config) -> Option<String> {
     let token = cfg
         .auth_token
         .clone()
-        .or_else(|| {
-            fs::read_to_string(cfg.data_dir.join("token"))
-                .ok()
-                .map(|t| t.trim().to_string())
-        })
-        .filter(|t| !t.is_empty())?;
+        .or_else(|| read_service_token(cfg))?;
     // The token feeds an HTTP header verbatim — reject anything that could
     // inject lines.
     if token.chars().all(|c| c.is_ascii_alphanumeric() || "-_.".contains(c)) { Some(token) } else { None }
@@ -198,9 +204,15 @@ fn admin_host(cfg: &Config) -> String {
     if cfg.bind.is_unspecified() { "127.0.0.1".to_string() } else { cfg.bind.to_string() }
 }
 
+/// admin_host formatted for URLs/Host headers — IPv6 needs brackets.
+fn admin_host_display(cfg: &Config) -> String {
+    let h = admin_host(cfg);
+    if h.contains(':') { format!("[{h}]") } else { h }
+}
+
 fn print_url(cfg: &Config) {
-    match read_token(cfg) {
-        Some(token) => println!("  http://{}:{}/?token={token}", admin_host(cfg), cfg.port),
+    match read_service_token(cfg) {
+        Some(token) => println!("  http://{}:{}/?token={token}", admin_host_display(cfg), cfg.port),
         None => println!("  (no token file at {} yet)", cfg.data_dir.display()),
     }
 }
@@ -240,7 +252,8 @@ pub fn up(cli: &Cli) -> anyhow::Result<()> {
             #[cfg(unix)]
             {
                 use std::os::unix::fs::PermissionsExt;
-                let _ = fs::set_permissions(&logs, std::fs::Permissions::from_mode(0o700));
+                fs::set_permissions(&logs, std::fs::Permissions::from_mode(0o700))
+                    .context("cannot lock down the launchd log dir")?;
             }
             fs::create_dir_all(plist_path()?.parent().unwrap())?;
             let plist = plist_path()?;
@@ -264,11 +277,26 @@ pub fn up(cli: &Cli) -> anyhow::Result<()> {
         }
     }
 
-    // The token file persists across runs, so reading it can't prove the
-    // service actually started — probe the port until it accepts.
+    // The token file persists across runs and a bare port probe can hit a
+    // foreign listener — require both the service manager reporting the
+    // unit active AND the port answering.
     let deadline = Instant::now() + Duration::from_secs(15);
+    let service_active = |p: Platform| -> bool {
+        match p {
+            Platform::Macos => Command::new("/bin/launchctl")
+                .args(["print", &format!("gui/{}/{}", uid().unwrap_or_default(), LABEL)])
+                .output()
+                .map(|o| o.status.success())
+                .unwrap_or(false),
+            Platform::Linux => systemd_out(&["is-active", "dream.service"])
+                .map(|o| o.status.success())
+                .unwrap_or(false),
+        }
+    };
     loop {
-        if TcpStream::connect(format!("{}:{}", admin_host(&cfg), cfg.port)).is_ok() {
+        if service_active(platform)
+            && TcpStream::connect((admin_host(&cfg).as_str(), cfg.port)).is_ok()
+        {
             let mgr = match platform { Platform::Macos => "launchd agent", Platform::Linux => "systemd --user service" };
             println!("dream is up ({mgr} {LABEL})");
             print_url(&cfg);
@@ -283,7 +311,7 @@ pub fn up(cli: &Cli) -> anyhow::Result<()> {
             return Ok(());
         }
         if Instant::now() > deadline {
-            println!("dream service installed but the port did not come up within 15s");
+            println!("dream service installed but the port did not come up within 30s");
             match platform {
                 Platform::Macos => println!("check {} for the cause", log_dir()?.join("err.log").display()),
                 Platform::Linux => println!("check `journalctl --user -u dream` for the cause"),
@@ -357,7 +385,10 @@ pub fn status(cli: &Cli) -> anyhow::Result<()> {
     println!("dream agent {LABEL}: state = {state}");
     let cfg = Config::load(cli)?;
     print_url(&cfg);
-    println!("  logs: {}", log_dir()?.display());
+    match platform()? {
+        Platform::Macos => println!("  logs: {}", log_dir()?.display()),
+        Platform::Linux => println!("  logs: journalctl --user -u dream  (or: dream logs)"),
+    }
     Ok(())
 }
 
@@ -398,7 +429,8 @@ pub fn logs(follow: bool) -> anyhow::Result<()> {
     let existing: Vec<&PathBuf> = [&out_log, &err_log].iter().filter(|p| p.exists()).copied().collect();
     for path in &existing {
         println!("== {} ==", path.display());
-        print!("{}", fs::read_to_string(path).unwrap_or_default());
+        print!("{}", fs::read_to_string(path)
+            .with_context(|| format!("cannot read {}", path.display()))?);
     }
     if follow && !existing.is_empty() {
         let mut args = vec!["-f".to_string()];
@@ -418,7 +450,7 @@ pub fn url(cli: &Cli) -> anyhow::Result<()> {
     let cfg = Config::load(cli)?;
     match read_token(&cfg) {
         Some(token) => {
-            println!("http://{}:{}/?token={token}", admin_host(&cfg), cfg.port);
+            println!("http://{}:{}/?token={token}", admin_host_display(&cfg), cfg.port);
             Ok(())
         }
         None => Err(anyhow!(
@@ -459,12 +491,12 @@ pub fn ps(cli: &Cli) -> anyhow::Result<()> {
 
 /// Minimal HTTP/1.1 GET against the loopback daemon (no new dep).
 fn http_get(cfg: &Config, path: &str, token: &str) -> anyhow::Result<String> {
-    let mut stream = TcpStream::connect(format!("{}:{}", admin_host(cfg), cfg.port))
+    let mut stream = TcpStream::connect((admin_host(cfg).as_str(), cfg.port))
         .context("cannot connect — is the daemon running? (dream status)")?;
     stream.set_read_timeout(Some(Duration::from_secs(10)))?;
     write!(
         stream,
-        "GET {path} HTTP/1.1\r\nHost: {}:{}\r\nAuthorization: Bearer {token}\r\nConnection: close\r\n\r\n", admin_host(cfg), cfg.port
+        "GET {path} HTTP/1.1\r\nHost: {}:{}\r\nAuthorization: Bearer {token}\r\nConnection: close\r\n\r\n", admin_host_display(cfg), cfg.port
     )?;
     let mut buf = Vec::new();
     std::io::Read::read_to_end(&mut stream, &mut buf)?;
@@ -474,10 +506,13 @@ fn http_get(cfg: &Config, path: &str, token: &str) -> anyhow::Result<String> {
         .nth(1)
         .and_then(|c| c.parse().ok())
         .unwrap_or(0);
-    if text.to_lowercase().contains("transfer-encoding: chunked") {
+    let (head, body) = match text.split_once("\r\n\r\n") {
+        Some((h, b)) => (h, b.to_string()),
+        None => (text.as_ref(), String::new()),
+    };
+    if head.to_lowercase().contains("transfer-encoding: chunked") {
         return Err(anyhow!("chunked response not supported by the CLI client"));
     }
-    let body = text.split_once("\r\n\r\n").map(|x| x.1).unwrap_or("").to_string();
     if status != 200 {
         return Err(anyhow!("GET {path} → HTTP {status}: {body:.200}"));
     }
@@ -521,7 +556,7 @@ pub fn doctor(cli: &Cli) -> anyhow::Result<()> {
     let running = matches!(agent_state.as_deref(), Some("running") | Some("active"));
     checks.push((running, format!("service state = {}", agent_state.unwrap_or_else(|| "not running".into()))));
 
-    let port_ok = TcpStream::connect(format!("{}:{}", admin_host(&cfg), cfg.port)).is_ok();
+    let port_ok = TcpStream::connect((admin_host(&cfg).as_str(), cfg.port)).is_ok();
     checks.push((port_ok, format!("port {} reachable", cfg.port)));
 
     let token_file = cfg.data_dir.join("token");
