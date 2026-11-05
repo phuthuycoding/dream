@@ -28,7 +28,7 @@ The owner runs AI coding agents in terminals on his Mac mini and wants to work w
 - Full interactive terminal in browser (xterm.js-class renderer): input, output, resize over WebSocket
 - Reattach semantics: new client receives buffered scrollback from the replay log, then the live stream
 - Server-restart resurrection: sessions respawn a fresh shell in the recorded cwd and restore the screen from the replay log, visibly marked as resurrected (running processes are lost — explicit owner decision over tmux-backed survival)
-- Single-user authentication (password or token) on every HTTP and WebSocket endpoint
+- Single-user authentication (password or token) on every API and WebSocket endpoint
 - Tailscale-first deployment: loopback bind by default, printed `tailscale serve` guidance, install hints when tailscale is absent
 
 ### Out of Scope
@@ -85,7 +85,7 @@ The owner runs AI coding agents in terminals on his Mac mini and wants to work w
 - Notes: Owner requirement — "quản lý session cũng như là thêm sửa xoá session". Edit applies to metadata; a live shell keeps running until killed/respawned.
 
 ### FR-007
-- Requirement: Every HTTP and WebSocket endpoint requires single-owner authentication (configured password or token); unauthenticated requests are rejected. When no credential is configured, the daemon generates a random token at first run, stores it with owner-only permissions in the data dir and prints the authenticated URL once at startup.
+- Requirement: Every API and WebSocket endpoint requires single-owner authentication (configured password or token); unauthenticated requests are rejected. The static frontend shell (HTML/CSS/JS, no session data) serves unauthenticated so a browser can boot it and carry the token to `/api` — browsers cannot attach credentials to `<script src>`/`<link>` subresource fetches. When no credential is configured, the daemon generates a random token at first run, stores it with owner-only permissions in the data dir and prints the authenticated URL once at startup.
 - Priority: must
 - Notes: A web terminal is unauthenticated RCE without this layer (reviews/research-remote-exposure.md). Generated-first-run behaviour is the defined answer to "no credential configured".
 
@@ -161,7 +161,7 @@ The owner runs AI coding agents in terminals on his Mac mini and wants to work w
 - Test level defaulted to `full`, UI coverage `critical` — the owner answered the packaging constraint instead of the test question; flagged in the confirmation ask
 
 ## Acceptance Criteria
-- [ ] Running the binary serves the dashboard on loopback; an unauthenticated request to any page or the WS endpoint is rejected
+- [ ] Running the binary serves the dashboard on loopback; an unauthenticated request to any `/api` route or the WS endpoint is rejected (the static shell itself is public)
 - [ ] After signing in, the dashboard lists a created session with the correct name, command, cwd and status
 - [ ] Clicking a session opens a terminal; typing `echo hi` produces visible output in the browser
 - [ ] An alt-screen TUI (e.g. `vim` or `htop`) renders fullscreen, accepts input, and survives reattach looking correct

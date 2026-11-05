@@ -41,7 +41,9 @@ address *and* holds the token gets a shell on your machine.
   the token file path is printed instead. Rotate by overwriting the file.
 - `--auth-token <T>` lets you supply your own token instead of the
   generated/persisted one.
-- Every request must carry the token: `Authorization: Bearer <token>` for
+- The static dashboard shell is served without auth (it contains no
+  secrets — browsers cannot attach `Bearer` to `<script src>`/`<link>`
+  fetches). Every **API** request must carry the token: `Authorization: Bearer <token>` for
   API calls; `?token=` is also accepted on the WebSocket upgrade and on
   non-API GETs so a pasted share-link URL bootstraps index.html.
 
