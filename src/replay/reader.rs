@@ -96,6 +96,87 @@ pub(crate) fn read_tail(path: &Path, n_bytes: u64) -> io::Result<Vec<Event>> {
     }
 }
 
+/// Raw bytes of the newest complete lines of `path` — plus any torn
+/// tail after them — that fit `n_bytes`, never reaching above `floor`
+/// (which must sit on a line boundary). Same EOF-windowed scan as
+/// [`read_tail`]: the window starts at `n_bytes` and doubles until the
+/// budget or `floor` settles it, so only ~the kept bytes are ever read.
+pub(crate) fn read_tail_bytes(path: &Path, floor: u64, n_bytes: u64) -> io::Result<Vec<u8>> {
+    let mut file = fs::File::open(path)?;
+    let mut window = n_bytes.max(1);
+    loop {
+        let file_len = file.metadata()?.len();
+        if file_len <= floor {
+            return Ok(Vec::new());
+        }
+        let start = file_len.saturating_sub(window).max(floor);
+        let whole_first_line = if start == 0 {
+            true
+        } else {
+            file.seek(SeekFrom::Start(start - 1))?;
+            let mut prev = [0u8; 1];
+            file.read_exact(&mut prev)?;
+            prev[0] == b'\n'
+        };
+        file.seek(SeekFrom::Start(start))?;
+        let mut buf = vec![0u8; (file_len - start) as usize];
+        match file.read_exact(&mut buf) {
+            // A concurrent in-place trim shrank the file under the read —
+            // re-stat and try again.
+            Err(err) if err.kind() == io::ErrorKind::UnexpectedEof => continue,
+            result => result?,
+        }
+        let (kept, settled) = tail_bytes_window(&buf, whole_first_line, start <= floor, n_bytes);
+        if settled || start <= floor {
+            return Ok(kept.to_vec());
+        }
+        window = window.saturating_mul(2);
+    }
+}
+
+/// Scan one EOF window for the newest complete newline-terminated lines
+/// fitting `n_bytes`. The returned slice runs from the oldest kept line
+/// to the end of `buf`, preserving any torn tail bytes; the flag has
+/// [`tail_window`]'s meaning (`false` — a wider window may keep more).
+fn tail_bytes_window(
+    buf: &[u8],
+    whole_first_line: bool,
+    at_region_start: bool,
+    n_bytes: u64,
+) -> (&[u8], bool) {
+    // Bytes after the last newline are a torn tail — kept verbatim when
+    // any line is kept, so an in-flight append is not cut mid-line.
+    let Some(last_nl) = buf.iter().rposition(|&b| b == b'\n') else {
+        return (&buf[buf.len()..], at_region_start);
+    };
+    let mut used = 0u64;
+    let mut kept_from = buf.len();
+    let mut end = last_nl + 1;
+    loop {
+        let line_start = buf[..end - 1]
+            .iter()
+            .rposition(|&b| b == b'\n')
+            .map_or(0, |i| i + 1);
+        let len = (end - line_start) as u64;
+        if used + len > n_bytes {
+            // Budget full — a fragment crossing the window edge only
+            // grows, so nothing older fits either.
+            return (&buf[kept_from..], true);
+        }
+        if line_start == 0 && !whole_first_line {
+            // The window opened mid-line: the fragment may still fit
+            // once its true length is known — a wider window decides.
+            return (&buf[kept_from..], false);
+        }
+        used += len;
+        kept_from = line_start;
+        if line_start == 0 {
+            return (&buf[kept_from..], at_region_start);
+        }
+        end = line_start;
+    }
+}
+
 /// Scan one EOF window for the newest whole events fitting `n_bytes`.
 /// The returned flag is `false` only when the scan ran off the window's
 /// oldest edge — a wider window may still add events.

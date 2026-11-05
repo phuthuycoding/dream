@@ -3,14 +3,16 @@
 //! A `.cast` file is NDJSON: a `{"version":3,"term":{...}}` header line
 //! followed by one `[interval, code, data]` event per line. Each interval
 //! is the seconds since the previous event (the first is relative to log
-//! creation). With a size cap set, each append trims the
-//! oldest whole events so the file stays under the cap — the retained
-//! window is the newest output. Rewrites happen in place (same inode), so
-//! a clean or trim mid-attach never leaves a torn frame boundary: readers
-//! see either the old or the new prefix-free content.
+//! creation). With a size cap set, an append that pushes the file over
+//! the cap trims the oldest whole events down to three quarters of it —
+//! the headroom amortizes each rewrite over ~cap/4 of new output instead
+//! of rewriting ~cap bytes per appended line. The retained window is the
+//! newest output. Rewrites happen in place (same inode), so a clean or
+//! trim mid-attach never leaves a torn frame boundary: readers see
+//! either the old or the new prefix-free content.
 
 use std::fs::{self, File, OpenOptions};
-use std::io::{self, Seek, SeekFrom, Write};
+use std::io::{self, BufRead, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
@@ -67,8 +69,9 @@ impl ReplayLog {
         })
     }
 
-    /// Cap the file size; oldest events are dropped after every append
-    /// that pushes the file over `cap`.
+    /// Cap the file size; when an append pushes the file over `cap`,
+    /// oldest events are dropped down to `cap - cap/4` of headroom so
+    /// the next trim is not due until ~cap/4 more bytes arrive.
     pub fn set_cap(&mut self, cap: u64) {
         self.cap = Some(cap);
     }
@@ -107,7 +110,10 @@ impl ReplayLog {
         self.size += line.len() as u64;
         if let Some(cap) = self.cap {
             if self.size > cap {
-                self.size = trim_file(&self.path, cap)?;
+                // Hysteresis: trim to cap - headroom, not cap, so the
+                // rewrite amortizes over ~cap/4 of new output instead of
+                // firing on every append while the log sits at the cap.
+                self.size = trim_file(&self.path, cap.saturating_sub(cap / 4))?;
             }
         }
         Ok(())
@@ -137,54 +143,32 @@ impl ReplayLog {
 }
 
 /// Drop the oldest whole event lines of the `.cast` at `path` until it
-/// fits `cap`, keeping the header and the newest events. Rewrites in
-/// place; returns the new file size. Shared with the retention enforcer.
-pub(crate) fn trim_file(path: &Path, cap: u64) -> io::Result<u64> {
-    let contents = fs::read(path)?;
-    let Some(header_end) = contents.iter().position(|&b| b == b'\n').map(|i| i + 1) else {
+/// fits `target`, keeping the header and the newest events. Reads only
+/// the header line plus a tail window of ~the bytes it keeps — never the
+/// whole file — then rewrites in place; returns the new file size.
+/// Shared with the retention enforcer.
+pub(crate) fn trim_file(path: &Path, target: u64) -> io::Result<u64> {
+    let mut file = OpenOptions::new().read(true).write(true).open(path)?;
+    let mut header = Vec::new();
+    io::BufReader::new(&file).read_until(b'\n', &mut header)?;
+    if !header.ends_with(b"\n") {
         // no newline at all — not something we can split into header + events
-        return Ok(contents.len() as u64);
-    };
-    let header = &contents[..header_end];
-    let events = &contents[header_end..];
-    let budget = cap.saturating_sub(header.len() as u64);
-
-    // Byte ranges of complete (newline-terminated) event lines; a trailing
-    // fragment is torn and gets dropped on rewrite.
-    let mut lines: Vec<(usize, usize)> = Vec::new();
-    let mut pos = 0usize;
-    while pos < events.len() {
-        match events[pos..].iter().position(|&b| b == b'\n') {
-            Some(rel) => {
-                lines.push((pos, rel + 1));
-                pos += rel + 1;
-            }
-            None => break,
-        }
+        return Ok(file.metadata()?.len());
     }
+    let budget = target.saturating_sub(header.len() as u64);
+    let kept = crate::replay::reader::read_tail_bytes(path, header.len() as u64, budget)?;
 
-    let mut kept_len = 0u64;
-    let mut kept_from = events.len();
-    for &(start, len) in lines.iter().rev() {
-        if kept_len + len as u64 > budget {
-            break;
-        }
-        kept_len += len as u64;
-        kept_from = start;
+    let new_len = header.len() as u64 + kept.len() as u64;
+    if new_len == file.metadata()?.len() {
+        return Ok(new_len);
     }
-
-    let new_len = header.len() + (events.len() - kept_from);
-    if new_len == contents.len() {
-        return Ok(new_len as u64);
-    }
-    let mut file = OpenOptions::new().write(true).open(path)?;
     // Shrink to the (byte-identical) header first, then rewrite the kept
     // events: a reader mid-trim sees only post-trim content, never the
     // old events being dropped.
     file.set_len(header.len() as u64)?;
     file.seek(SeekFrom::Start(header.len() as u64))?;
-    file.write_all(&events[kept_from..])?;
-    Ok(new_len as u64)
+    file.write_all(&kept)?;
+    Ok(new_len)
 }
 
 /// Force owner-only permissions on a replay log — session transcripts
@@ -322,6 +306,43 @@ mod tests {
             serde_json::from_str::<serde_json::Value>(line)
                 .expect("every retained event line must be complete JSON");
         }
+    }
+
+    #[test]
+    fn trim_leaves_headroom_below_cap_so_rewrites_amortize() {
+        const CAP: u64 = 8 * 1024;
+        let dir = TempDir::new().unwrap();
+        let path = log_path(&dir);
+        let mut log = ReplayLog::create(&path, 80, 24).unwrap();
+        log.set_cap(CAP);
+
+        let payload = vec![b'q'; 1024];
+        let mut before = log.size();
+        let mut post_trim = None;
+        for _ in 0..12 {
+            log.append_output(&payload).unwrap();
+            if log.size() < before {
+                post_trim = Some(log.size());
+                break;
+            }
+            before = log.size();
+        }
+
+        let size = post_trim.expect("crossing the cap must trigger a trim");
+        assert!(
+            size <= CAP - CAP / 4,
+            "trim must cut to cap-headroom so rewrites amortize: {size}"
+        );
+        assert!(
+            size > CAP / 2,
+            "trim keeps a real window of newest events: {size}"
+        );
+        assert_eq!(size, fs::metadata(&path).unwrap().len());
+        let events = read_events(&path).unwrap();
+        assert!(
+            matches!(events.last(), Some(Event::Output(bytes)) if bytes == payload.as_slice()),
+            "newest event must survive the trim"
+        );
     }
 
     #[test]
