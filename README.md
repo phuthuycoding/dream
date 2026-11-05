@@ -95,12 +95,14 @@ tailscale serve --bg 4020
 `http://127.0.0.1:4020` — webterm is then reachable at
 `https://<machine>.<tailnet>.ts.net/?token=<token>` from tailnet devices
 only. `tailscale` must be installed (`brew install tailscale` on macOS, or
-see https://tailscale.com/download) and logged in.
+see https://tailscale.com/download) and logged in, and the tailnet's HTTPS
+certificates feature must be enabled (admin console → DNS → HTTPS
+Certificates).
 
 ## Auto-start on macOS (launchd)
 
 Save as `~/Library/LaunchAgents/dev.webterm.plist`, adjusting the binary
-path:
+and log paths (launchd does not expand `~` — use absolute paths):
 
 ```xml
 <?xml version="1.0" encoding="UTF-8"?>
@@ -121,9 +123,9 @@ path:
   <key>KeepAlive</key>
   <true/>
   <key>StandardOutPath</key>
-  <string>/tmp/webterm.out.log</string>
+  <string>/Users/<you>/Library/Logs/webterm.out.log</string>
   <key>StandardErrorPath</key>
-  <string>/tmp/webterm.err.log</string>
+  <string>/Users/<you>/Library/Logs/webterm.err.log</string>
 </dict>
 </plist>
 ```
@@ -132,6 +134,10 @@ path:
 launchctl load ~/Library/LaunchAgents/dev.webterm.plist
 launchctl start dev.webterm
 ```
+
+webterm prints the token URL once on first run to stdout, so keep these
+logs owner-private — `~/Library/Logs` is, a world-readable `/tmp` file is
+not.
 
 ## CLI reference
 
@@ -149,10 +155,11 @@ launchctl start dev.webterm
 
 ```sh
 cargo build --release
-shasum -a 256 target/release/webterm > webterm-<version>-<os>-<arch>.sha256
+(cd target/release && shasum -a 256 webterm) > webterm-<version>-<os>-<arch>.sha256
 ```
 
 Publish the binary and the `.sha256` side-by-side; consumers verify with
-`shasum -a 256 -c webterm-<version>-<os>-<arch>.sha256`. The release profile
+`shasum -a 256 -c webterm-<version>-<os>-<arch>.sha256` run in the
+directory containing the `webterm` binary. The release profile
 strips symbols, enables LTO and `codegen-units = 1`, and optimizes for size
 (`opt-level = "z"`).
