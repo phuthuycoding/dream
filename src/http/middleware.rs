@@ -2,7 +2,7 @@
 
 use axum::{
     extract::{Request, State},
-    http::{header, StatusCode},
+    http::{header, Method, StatusCode},
     middleware::Next,
     response::{IntoResponse, Response},
 };
@@ -10,9 +10,11 @@ use axum::{
 use crate::http::routes::AppState;
 
 /// Reject with 401 unless the request carries the token either as
-/// `Authorization: Bearer <token>` or, on WS-upgrade requests only, as a
-/// `?token=` query parameter — the channel the browser WS client uses, since
-/// it cannot set headers. Scoping keeps the secret out of plain REST URLs.
+/// `Authorization: Bearer <token>` or as a `?token=` query parameter on the
+/// two route classes that cannot send headers: WS-upgrade requests (the
+/// browser WS client) and GETs to non-`/api/` routes (the share-link that
+/// bootstraps index.html, FR-007). `/api/*` stays Bearer-only so the secret
+/// never lands in REST URLs.
 pub async fn require_token(
     State(state): State<AppState>,
     request: Request,
@@ -27,11 +29,16 @@ pub async fn require_token(
 
 fn is_authorized(request: &Request, token: &str) -> bool {
     bearer_token(request) == Some(token)
-        || (is_ws_upgrade(request) && query_token(request) == Some(token))
+        || (accepts_query_token(request) && query_token(request) == Some(token))
 }
 
-/// True when the request asks for a websocket upgrade — the only route class
-/// where `?token=` is honoured.
+/// `?token=` is honoured only on WS upgrades and on GETs outside `/api/`.
+fn accepts_query_token(request: &Request) -> bool {
+    is_ws_upgrade(request)
+        || (request.method() == Method::GET && !request.uri().path().starts_with("/api/"))
+}
+
+/// True when the request asks for a websocket upgrade.
 fn is_ws_upgrade(request: &Request) -> bool {
     request
         .headers()
