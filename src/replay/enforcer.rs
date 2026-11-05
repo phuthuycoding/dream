@@ -7,6 +7,7 @@
 //! files are left alone, and no log is ever fabricated.
 
 use crate::replay::log::trim_file;
+use std::collections::HashSet;
 use std::fs::{self, OpenOptions};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
@@ -32,7 +33,25 @@ pub struct RetentionPolicy {
 /// file cannot abort enforcement for the remaining sessions; per-log
 /// failures are aggregated into the returned error.
 pub fn enforce(dir: &Path, policy: &RetentionPolicy) -> io::Result<()> {
-    for_each_log(dir, |path| enforce_log(path, policy))
+    enforce_excluding(dir, policy, &HashSet::new())
+}
+
+/// Like [`enforce`], but logs whose session dir — the log's parent — is
+/// in `skip` are left untouched: a live runtime owns those files and a
+/// trim or reset under it would tear the log it appends to. Entries in
+/// `skip` are compared literally, so build them in the same path form
+/// `dir` uses.
+pub fn enforce_excluding(
+    dir: &Path,
+    policy: &RetentionPolicy,
+    skip: &HashSet<PathBuf>,
+) -> io::Result<()> {
+    for_each_log(dir, |path| {
+        if path.parent().is_some_and(|parent| skip.contains(parent)) {
+            return Ok(());
+        }
+        enforce_log(path, policy)
+    })
 }
 
 /// Apply `policy` to one log; failures propagate to `enforce`'s

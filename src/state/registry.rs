@@ -68,7 +68,7 @@ impl Registry {
     ) -> anyhow::Result<Session> {
         let id = Uuid::new_v4().to_string();
         let dir = self.session_dir(&id);
-        fs::create_dir_all(&dir)
+        create_dir_private(&dir)
             .with_context(|| format!("cannot create session dir {}", dir.display()))?;
         let session = Session {
             id,
@@ -224,6 +224,27 @@ fn id_matches_dir(session: &Session, dir: &Path) -> bool {
     }
 }
 
+/// Create a session dir owner-only (0700) — session metadata and replay
+/// logs may hold secrets. `mode()` applies only to dirs it creates, so
+/// permissions are forced afterwards to cover a pre-existing dir whose
+/// mode drifted. Permissions are a no-op off unix.
+fn create_dir_private(dir: &Path) -> std::io::Result<()> {
+    let mut builder = fs::DirBuilder::new();
+    builder.recursive(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::DirBuilderExt;
+        builder.mode(0o700);
+    }
+    builder.create(dir)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(dir, fs::Permissions::from_mode(0o700))?;
+    }
+    Ok(())
+}
+
 /// Write `session.json` atomically: a uniquely named tmp file in the same dir,
 /// fsync'd, then renamed; the dir is fsync'd so the rename itself is durable.
 fn save_session(dir: &Path, session: &Session) -> anyhow::Result<()> {
@@ -231,7 +252,15 @@ fn save_session(dir: &Path, session: &Session) -> anyhow::Result<()> {
     let tmp_path = dir.join(format!("tmp-{}", Uuid::new_v4()));
     let body = serde_json::to_string_pretty(session).context("serialize session")?;
     {
-        let mut tmp = fs::File::create(&tmp_path)
+        let mut options = fs::OpenOptions::new();
+        options.write(true).create(true).truncate(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        let mut tmp = options
+            .open(&tmp_path)
             .with_context(|| format!("cannot write {}", tmp_path.display()))?;
         tmp.write_all(body.as_bytes())
             .with_context(|| format!("cannot write {}", tmp_path.display()))?;

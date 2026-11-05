@@ -1,8 +1,9 @@
 //! Asciicast-v3 replay log writer.
 //!
 //! A `.cast` file is NDJSON: a `{"version":3,"term":{...}}` header line
-//! followed by one `[interval, code, data]` event per line. Intervals are
-//! relative to log creation. With a size cap set, each append trims the
+//! followed by one `[interval, code, data]` event per line. Each interval
+//! is the seconds since the previous event (the first is relative to log
+//! creation). With a size cap set, each append trims the
 //! oldest whole events so the file stays under the cap — the retained
 //! window is the newest output. Rewrites happen in place (same inode), so
 //! a clean or trim mid-attach never leaves a torn frame boundary: readers
@@ -27,7 +28,7 @@ pub enum Event {
 pub struct ReplayLog {
     path: PathBuf,
     file: File,
-    start: Instant,
+    last_event: Instant,
     header: String,
     cap: Option<u64>,
     size: u64,
@@ -43,18 +44,23 @@ impl ReplayLog {
         let header = format!(
             "{{\"version\":3,\"term\":{{\"cols\":{cols},\"rows\":{rows},\"type\":\"xterm-256color\"}}}}\n"
         );
-        let mut file = OpenOptions::new()
-            .read(true)
-            .write(true)
-            .create(true)
-            .truncate(true)
-            .open(path)?;
+        let mut options = OpenOptions::new();
+        options.read(true).write(true).create(true).truncate(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        let mut file = options.open(path)?;
+        // `mode()` applies only when the file is created; a pre-existing
+        // log keeps its old permissions unless forced.
+        ensure_owner_only(path)?;
         file.write_all(header.as_bytes())?;
         let size = header.len() as u64;
         Ok(Self {
             path: path.to_path_buf(),
             file,
-            start: Instant::now(),
+            last_event: Instant::now(),
             header,
             cap: None,
             size,
@@ -89,7 +95,10 @@ impl ReplayLog {
     }
 
     fn append_event(&mut self, code: &str, data: &str) -> io::Result<()> {
-        let event = serde_json::json!([self.start.elapsed().as_secs_f64(), code, data]);
+        let now = Instant::now();
+        let interval = now.duration_since(self.last_event);
+        self.last_event = now;
+        let event = serde_json::json!([interval.as_secs_f64(), code, data]);
         let mut line = serde_json::to_string(&event)
             .map_err(io::Error::other)?;
         line.push('\n');
@@ -108,18 +117,7 @@ impl ReplayLog {
     /// `n_bytes` — always at least the newest event, always ending at the
     /// current end of log, never a torn frame.
     pub fn tail(&self, n_bytes: u64) -> io::Result<Vec<Event>> {
-        let parsed = crate::replay::reader::read_events_sized(&self.path)?;
-        let mut kept: Vec<Event> = Vec::new();
-        let mut used = 0u64;
-        for (event, len) in parsed.into_iter().rev() {
-            if !kept.is_empty() && used + len > n_bytes {
-                break;
-            }
-            used += len;
-            kept.push(event);
-        }
-        kept.reverse();
-        Ok(kept)
+        crate::replay::reader::read_tail(&self.path, n_bytes)
     }
 
     /// Reset the log to just its header — the per-session clean. Writers
@@ -133,7 +131,7 @@ impl ReplayLog {
         self.file.seek(SeekFrom::Start(0))?;
         self.file.write_all(self.header.as_bytes())?;
         self.size = self.header.len() as u64;
-        self.start = Instant::now();
+        self.last_event = Instant::now();
         Ok(())
     }
 }
@@ -187,6 +185,19 @@ pub(crate) fn trim_file(path: &Path, cap: u64) -> io::Result<u64> {
     file.seek(SeekFrom::Start(header.len() as u64))?;
     file.write_all(&events[kept_from..])?;
     Ok(new_len as u64)
+}
+
+/// Force owner-only permissions on a replay log — session transcripts
+/// may hold secrets. No-op off unix.
+#[cfg(unix)]
+fn ensure_owner_only(path: &Path) -> io::Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    fs::set_permissions(path, fs::Permissions::from_mode(0o600))
+}
+
+#[cfg(not(unix))]
+fn ensure_owner_only(_path: &Path) -> io::Result<()> {
+    Ok(())
 }
 
 #[cfg(test)]
