@@ -22,6 +22,15 @@ pub struct Cli {
     /// Allow binding a non-loopback interface (prints a security warning)
     #[arg(long)]
     pub public: bool,
+
+    /// Per-session replay log size cap in bytes; oldest events are trimmed
+    /// once a log grows past this
+    #[arg(long, value_name = "BYTES")]
+    pub log_cap: Option<u64>,
+
+    /// Max replay log age in seconds; older logs are reset to a fresh header
+    #[arg(long, value_name = "SECONDS")]
+    pub log_max_age: Option<u64>,
 }
 
 impl Cli {

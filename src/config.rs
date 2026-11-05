@@ -1,5 +1,6 @@
 use std::net::IpAddr;
 use std::path::PathBuf;
+use std::time::Duration;
 
 use anyhow::bail;
 
@@ -13,6 +14,8 @@ pub struct Config {
     pub data_dir: PathBuf,
     pub auth_token: Option<String>,
     pub public: bool,
+    pub log_cap: Option<u64>,
+    pub log_max_age: Option<Duration>,
 }
 
 impl Config {
@@ -48,6 +51,8 @@ impl Config {
             data_dir,
             auth_token: cli.auth_token.clone(),
             public,
+            log_cap: cli.log_cap,
+            log_max_age: cli.log_max_age.map(Duration::from_secs),
         })
     }
 
