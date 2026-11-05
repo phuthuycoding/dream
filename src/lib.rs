@@ -8,3 +8,6 @@ pub mod config;
 pub mod pty;
 pub mod state;
 pub mod replay;
+pub mod vt;
+pub mod auth;
+pub mod http;
