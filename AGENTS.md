@@ -6,9 +6,12 @@ Conventions for AI coding agents working in this repository. Seeded by `kf init`
 
 | Task | Command |
 |---|---|
-| Build | `TODO: fill in` |
-| Test | `TODO: fill in` |
-| Lint | `TODO: fill in` |
+| Install | `cargo build` |
+| Build | `cargo build` |
+| Typecheck | `cargo check` |
+| Lint | `cargo clippy --all-targets` |
+| Test | `cargo test` |
+| E2E | `npx playwright test` |
 
 Detect anything else by reading the repository, never by guessing.
 
