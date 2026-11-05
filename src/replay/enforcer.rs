@@ -27,24 +27,29 @@ pub struct RetentionPolicy {
 }
 
 /// Apply `policy` to every replay log under `dir`.
+///
+/// A log that fails is warned and skipped so one unreadable or corrupt
+/// file cannot abort enforcement for the remaining sessions; per-log
+/// failures are aggregated into the returned error.
 pub fn enforce(dir: &Path, policy: &RetentionPolicy) -> io::Result<()> {
-    for path in session_logs(dir)? {
-        let meta = fs::metadata(&path)?;
-        if let Some(max_age) = policy.max_age {
-            let over_age = meta
-                .modified()
-                .ok()
-                .and_then(|mtime| SystemTime::now().duration_since(mtime).ok())
-                .is_some_and(|age| age > max_age);
-            if over_age {
-                reset_log(&path)?;
-                continue;
-            }
+    for_each_log(dir, |path| enforce_log(path, policy))
+}
+
+/// Apply `policy` to one log; failures propagate to `enforce`'s
+/// per-log collection.
+fn enforce_log(path: &Path, policy: &RetentionPolicy) -> io::Result<()> {
+    let meta = fs::metadata(path)?;
+    if let Some(max_age) = policy.max_age {
+        // An unreadable mtime is an error for this log, not a silent pass.
+        let mtime = meta.modified()?;
+        if SystemTime::now().duration_since(mtime).is_ok_and(|age| age > max_age) {
+            reset_log(path)?;
+            return Ok(());
         }
-        if let Some(cap) = policy.max_size_bytes {
-            if meta.len() > cap {
-                trim_file(&path, cap)?;
-            }
+    }
+    if let Some(cap) = policy.max_size_bytes {
+        if meta.len() > cap {
+            trim_file(path, cap)?;
         }
     }
     Ok(())
@@ -52,12 +57,31 @@ pub fn enforce(dir: &Path, policy: &RetentionPolicy) -> io::Result<()> {
 
 /// Reset every replay log under `dir` to a fresh header, preserving each
 /// log's own header line (terminal size). Sessions without a log are
-/// skipped — nothing is created.
+/// skipped — nothing is created. Per-log failures are handled like
+/// [`enforce`]'s.
 pub fn clean_all(dir: &Path) -> io::Result<()> {
+    for_each_log(dir, reset_log)
+}
+
+/// Run `op` on every replay log under `dir`, collecting per-log errors
+/// instead of aborting. Returns `Ok` when every log succeeded, else an
+/// aggregated error after all logs were attempted.
+fn for_each_log(dir: &Path, op: impl Fn(&Path) -> io::Result<()>) -> io::Result<()> {
+    let mut failures = Vec::new();
     for path in session_logs(dir)? {
-        reset_log(&path)?;
+        if let Err(err) = op(&path) {
+            tracing::warn!(path = %path.display(), error = %err, "skipping replay log");
+            failures.push(format!("{}: {err}", path.display()));
+        }
     }
-    Ok(())
+    if failures.is_empty() {
+        Ok(())
+    } else {
+        Err(io::Error::new(
+            io::ErrorKind::Other,
+            format!("{} replay log(s) failed: {}", failures.len(), failures.join("; ")),
+        ))
+    }
 }
 
 /// All replay logs under `dir`: `dir/replay.cast` plus `dir/<session>/replay.cast`.
@@ -85,8 +109,11 @@ fn session_logs(dir: &Path) -> io::Result<Vec<PathBuf>> {
 fn reset_log(path: &Path) -> io::Result<()> {
     let header = header_line(path)?;
     let file = OpenOptions::new().write(true).open(path)?;
+    // Truncate before writing: the replacement header may differ from
+    // the old one, so a reader mid-reset must see an empty or torn
+    // header — never pre-clean events behind the new header.
+    file.set_len(0)?;
     (&file).write_all(&header)?;
-    file.set_len(header.len() as u64)?;
     Ok(())
 }
 

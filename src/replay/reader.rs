@@ -23,14 +23,18 @@ pub fn read_events(path: &Path) -> io::Result<Vec<Event>> {
 /// Like [`read_events`] but pairs each event with the byte length of its
 /// on-disk line so `ReplayLog::tail` can size a suffix window.
 pub(crate) fn read_events_sized(path: &Path) -> io::Result<Vec<(Event, u64)>> {
-    let contents = fs::read_to_string(path)?;
+    let contents = fs::read(path)?;
     let header_end = contents
-        .find('\n')
+        .iter()
+        .position(|&b| b == b'\n')
         .map(|i| i + 1)
         .unwrap_or(contents.len());
     let mut events = Vec::new();
-    for line in contents[header_end..].split_inclusive('\n') {
-        match parse_event_line(line.trim_end()) {
+    for line in contents[header_end..].split_inclusive(|&b| b == b'\n') {
+        // Lossy decode keeps a crash mid-multibyte write from failing the
+        // whole read; the torn line fails to parse and stops the scan.
+        let text = String::from_utf8_lossy(line);
+        match parse_event_line(text.trim_end()) {
             Some(Some(event)) => events.push((event, line.len() as u64)),
             Some(None) => continue,
             None => break,

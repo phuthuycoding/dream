@@ -126,9 +126,12 @@ impl ReplayLog {
     /// keep appending afterwards; readers attaching later see only
     /// post-clean events.
     pub fn truncate_fresh(&mut self) -> io::Result<()> {
+        // Shrink before rewriting: the retained prefix is byte-identical,
+        // so a reader mid-reset sees either the old log or exactly the
+        // fresh header — never pre-clean events behind the new header.
+        self.file.set_len(self.header.len() as u64)?;
         self.file.seek(SeekFrom::Start(0))?;
         self.file.write_all(self.header.as_bytes())?;
-        self.file.set_len(self.header.len() as u64)?;
         self.size = self.header.len() as u64;
         self.start = Instant::now();
         Ok(())
@@ -176,10 +179,13 @@ pub(crate) fn trim_file(path: &Path, cap: u64) -> io::Result<u64> {
     if new_len == contents.len() {
         return Ok(new_len as u64);
     }
-    let file = OpenOptions::new().write(true).open(path)?;
-    (&file).write_all(header)?;
-    (&file).write_all(&events[kept_from..])?;
-    file.set_len(new_len as u64)?;
+    let mut file = OpenOptions::new().write(true).open(path)?;
+    // Shrink to the (byte-identical) header first, then rewrite the kept
+    // events: a reader mid-trim sees only post-trim content, never the
+    // old events being dropped.
+    file.set_len(header.len() as u64)?;
+    file.seek(SeekFrom::Start(header.len() as u64))?;
+    file.write_all(&events[kept_from..])?;
     Ok(new_len as u64)
 }
 
