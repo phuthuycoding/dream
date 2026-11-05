@@ -1,11 +1,19 @@
 //! Attach snapshot byte-stream: build and verify.
 //!
-//! Layout: `\x1bc` (RIS) + `\x1b[?2026h` (synchronized-update open) +
-//! alt-screen re-entry when active + screen dump (cells and attributes)
-//! + `\x1b[?2026l` (sync close) + CUP for the cursor position.
+//! Layout: `\x1bc` (RIS) + `\x1b[8;<rows>;<cols>t` (geometry field) +
+//! `\x1b[?2026h` (synchronized-update open) + alt-screen re-entry when
+//! active + screen dump (cells and attributes) + input-mode restores +
+//! `\x1b[?2026l` (sync close) + cursor state + attribute restore.
 //!
 //! The DEC-2026 wrap lets the attaching client apply the repaint
 //! atomically instead of flickering through the dumped frames.
+//!
+//! Attach contract: the snapshot contains no implicit reflow — the dump
+//! wraps at the emulator's columns. The client MUST resize to the
+//! session's cols/rows (FitAddon) before replaying. The geometry is
+//! encoded as `\x1b[8;<rows>;<cols>t` immediately after the RIS; the
+//! attach path can parse that field to enforce the contract, and clients
+//! that honor window ops will resize themselves on replay.
 
 use vt100::Screen;
 
@@ -16,10 +24,14 @@ const ALT_ENTER: &[u8] = b"\x1b[?1049h";
 
 /// Serialize the visible screen as an attach snapshot.
 pub(crate) fn build(screen: &Screen) -> Vec<u8> {
-    let (row, col) = screen.cursor_position();
+    let (rows, cols) = screen.size();
 
     let mut out = Vec::new();
     out.extend_from_slice(RIS);
+    // CSI 8 ; rows ; cols t — geometry field (see module doc) and a
+    // resize request for clients that honor it; vt100 replays ignore it
+    // (resize is a callback, not parser state).
+    out.extend_from_slice(format!("\x1b[8;{rows};{cols}t").as_bytes());
     out.extend_from_slice(SYNC_OPEN);
     // contents_formatted() dumps the *active* screen; the attach must
     // re-enter the alt screen first so replay lands on the right buffer.
@@ -27,9 +39,17 @@ pub(crate) fn build(screen: &Screen) -> Vec<u8> {
         out.extend_from_slice(ALT_ENTER);
     }
     out.extend_from_slice(&screen.contents_formatted());
+    // RIS reset the client's input modes; re-emit them inside the sync
+    // block so keys, paste and mouse keep their negotiated encodings.
+    // vt100 exposes no DECAWM/DECOM state, so those cannot be restored.
+    out.extend_from_slice(&screen.input_mode_formatted());
     out.extend_from_slice(SYNC_CLOSE);
-    // cursor_position() is 0-based; CUP is 1-based.
-    out.extend_from_slice(format!("\x1b[{};{}H", row + 1, col + 1).as_bytes());
+    // cursor_state_formatted() re-parks a pending-wrap cursor by
+    // redrawing the last cell; a bare CUP would drop the wrap flag and
+    // the next printed char would not auto-wrap.
+    out.extend_from_slice(&screen.cursor_state_formatted());
+    // That restore may redraw a cell and leave its attributes active.
+    out.extend_from_slice(&screen.attributes_formatted());
     out
 }
 
