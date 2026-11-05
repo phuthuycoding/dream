@@ -1,6 +1,14 @@
+use std::time::Duration;
+
 use anyhow::Context;
-use axum::{routing::get, Router};
-use webterm::{cli::Cli, config::Config};
+use webterm::{
+    auth::AuthToken,
+    cli::Cli,
+    config::Config,
+    http::routes::build_router,
+    replay::enforcer::RetentionPolicy,
+    runtime::{RuntimeManager, DEFAULT_IDLE_ATTENTION},
+};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -13,10 +21,34 @@ async fn main() -> anyhow::Result<()> {
 
     let cli = Cli::parse();
     let cfg = Config::load(&cli)?;
-
-    let app = Router::new().route("/", get(|| async { "webterm" }));
-
     let addr = cfg.listen_addr();
+
+    let auth = AuthToken::load_or_generate(&cfg.data_dir)?;
+
+    // Resurrect sessions that were live when the daemon last stopped, and
+    // start the retention enforcer when a policy is configured.
+    let manager = RuntimeManager::new(cfg.data_dir.clone(), DEFAULT_IDLE_ATTENTION);
+    match manager.resurrect_all().await {
+        Ok(0) => {}
+        Ok(n) => tracing::info!("resurrected {n} session(s)"),
+        Err(err) => tracing::warn!(error = %err, "session resurrection failed"),
+    }
+    if cfg.log_cap.is_some() || cfg.log_max_age.is_some() {
+        let policy = RetentionPolicy {
+            max_size_bytes: cfg.log_cap,
+            max_age: cfg.log_max_age,
+        };
+        manager.spawn_enforcer(policy, Duration::from_secs(60));
+    }
+
+    if auth.first_run {
+        println!("webterm ready — open this URL once to authenticate:");
+        println!("  http://{addr}/?token={}", auth.token);
+    } else {
+        println!("webterm ready — token file at {}", cfg.data_dir.display());
+    }
+
+    let app = build_router(cfg.data_dir.clone(), auth.token);
     let listener = tokio::net::TcpListener::bind(&addr)
         .await
         .with_context(|| format!("cannot bind {addr} — port already in use?"))?;

@@ -9,7 +9,7 @@ use std::sync::Arc;
 use axum::{
     body::Bytes,
     extract::{
-        ws::{WebSocket, WebSocketUpgrade},
+        ws::WebSocketUpgrade,
         Path, State,
     },
     http::StatusCode,
