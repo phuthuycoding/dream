@@ -1,7 +1,9 @@
 {
   "schema": "kanban-flow",
   "defaultContext": "app",
-  "stacks": [],
+  "stacks": [
+    "rust"
+  ],
   "reviewer": "phuthuycoding",
   "agents": [
     "claude"
@@ -9,5 +11,35 @@
   "skills": {
     "scope": "global"
   },
-  "created": "20261105_1825"
+  "created": "20261105_1825",
+  "harness": {
+    "verify": {
+      "task": [
+        [
+          "cargo",
+          "test",
+          "--quiet"
+        ]
+      ],
+      "stage": [
+        [
+          "cargo",
+          "test"
+        ],
+        [
+          "cargo",
+          "clippy",
+          "--all-targets",
+          "--",
+          "-D",
+          "warnings"
+        ],
+        [
+          "cargo",
+          "build",
+          "--release"
+        ]
+      ]
+    }
+  }
 }
