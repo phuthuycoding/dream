@@ -90,16 +90,19 @@ function sessionCard(session) {
           v.classList.add('copied');
           setTimeout(() => v.classList.remove('copied'), 900);
         };
-        if (navigator.clipboard) {
-          void navigator.clipboard.writeText(session.id).then(done);
-        } else {
+        const fallback = () => {
           const ta = document.createElement('textarea');
           ta.value = session.id;
           document.body.appendChild(ta);
           ta.select();
-          document.execCommand('copy');
+          const ok = document.execCommand('copy');
           ta.remove();
-          done();
+          if (ok) done();
+        };
+        if (navigator.clipboard) {
+          void navigator.clipboard.writeText(session.id).then(done, fallback);
+        } else {
+          fallback();
         }
       });
     }

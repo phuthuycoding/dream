@@ -35,6 +35,8 @@ dream doctor  # diagnose: service, port, token, tailscale
 dream down    # stop + remove the service
 ```
 
+Upgrading from `webterm`? The data dir moved to `~/Library/Application Support/dream` (`~/.local/share/dream` on Linux) — copy the old `webterm` dir over, or just re-open the printed URL once. `DREAM_AUTH_TOKEN` replaces `WEBTERM_AUTH_TOKEN`; the browser re-prompts the token.
+
 dream binds loopback only by default. Binding anything else requires
 `--public`, which prints a security warning — anyone who can reach the
 address *and* holds the token gets a shell on your machine.

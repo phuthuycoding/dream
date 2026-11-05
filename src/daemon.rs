@@ -104,8 +104,10 @@ fn systemd_unit(program_args: &[String]) -> anyhow::Result<String> {
         .join(" ");
     Ok(format!(
         "[Unit]\nDescription=dream web terminal daemon\nAfter=network-online.target\n\n\
-         [Service]\nExecStart={exec}\nRestart=always\nRestartSec=3\n\n\
-         [Install]\nWantedBy=default.target\n"
+         [Service]\nEnvironment=PATH={svc_path}\nExecStart={exec}\nRestart=always\nRestartSec=3\n\n\
+         [Install]\nWantedBy=default.target\n",
+        svc_path = SERVICE_PATH.replace('~', "%h"),
+        exec = exec
     ))
 }
 
@@ -130,6 +132,10 @@ fn xml_escape(s: &str) -> String {
         .replace('<', "&lt;")
         .replace('>', "&gt;")
 }
+
+/// PATH the service's PTY children inherit — launchd/systemd start with a
+/// minimal PATH that misses /opt/homebrew/bin where the AI CLIs live.
+const SERVICE_PATH: &str = "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:~/.local/bin";
 
 fn plist_xml(program_args: &[String], log_out: &str, log_err: &str) -> String {
     let args: String = program_args
@@ -156,11 +162,17 @@ fn plist_xml(program_args: &[String], log_out: &str, log_err: &str) -> String {
   <string>{out}</string>
   <key>StandardErrorPath</key>
   <string>{err}</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>{svc_path}</string>
+  </dict>
 </dict>
 </plist>
 "#,
         out = xml_escape(log_out),
         err = xml_escape(log_err),
+        svc_path = xml_escape(SERVICE_PATH),
     )
 }
 
@@ -217,11 +229,31 @@ fn print_url(cfg: &Config) {
     }
 }
 
+fn service_active(p: Platform) -> bool {
+    match p {
+        Platform::Macos => Command::new("/bin/launchctl")
+            .args(["print", &format!("gui/{}/{}", uid().unwrap_or_default(), LABEL)])
+            .output()
+            .map(|o| {
+                o.status.success()
+                    && String::from_utf8_lossy(&o.stdout).contains("state = running")
+            })
+            .unwrap_or(false),
+        Platform::Linux => systemd_out(&["is-active", "dream.service"])
+            .map(|o| o.status.success())
+            .unwrap_or(false),
+    }
+}
+
 /// `dream up` — install + bootstrap the agent; idempotent.
 pub fn up(cli: &Cli) -> anyhow::Result<()> {
     let platform = platform()?;
     let exe = std::env::current_exe().context("cannot resolve own binary path")?;
-    let cfg = Config::load(cli)?;
+    let mut cfg = Config::load(cli)?;
+    // The service starts with cwd=/ — a relative data dir would resolve to a
+    // different location under the agent than the CLI just created.
+    cfg.data_dir = fs::canonicalize(&cfg.data_dir)
+        .with_context(|| format!("cannot resolve {}", cfg.data_dir.display()))?;
     if cfg.auth_token.is_some() {
         eprintln!("note: --auth-token/DREAM_AUTH_TOKEN is not stored in the service unit; the service generates/reads the token file");
     }
@@ -257,19 +289,32 @@ pub fn up(cli: &Cli) -> anyhow::Result<()> {
             }
             fs::create_dir_all(plist_path()?.parent().unwrap())?;
             let plist = plist_path()?;
-            fs::write(
-                &plist,
-                plist_xml(&args, &logs.join("out.log").display().to_string(), &logs.join("err.log").display().to_string()),
-            )
-            .with_context(|| format!("cannot write {}", plist.display()))?;
+            let new_xml = plist_xml(&args, &logs.join("out.log").display().to_string(), &logs.join("err.log").display().to_string());
+            // `up` is a daily command — when the unit text did not change,
+            // leave a healthy running agent alone instead of killing its ptys.
+            let already = fs::read_to_string(&plist).map(|c| c == new_xml).unwrap_or(false);
+            if already && service_active(Platform::Macos) {
+                println!("dream is already up — nothing to do");
+                print_url(&cfg);
+                return Ok(());
+            }
+            fs::write(&plist, &new_xml)
+                .with_context(|| format!("cannot write {}", plist.display()))?;
             let svc = service()?;
             let _ = launchctl(&["bootout", &svc]);
             launchctl(&["bootstrap", &format!("gui/{}", uid()?), &plist.display().to_string()])?;
         }
         Platform::Linux => {
             let unit = systemd_unit_path()?;
+            let new_unit = systemd_unit(&args)?;
+            let already = fs::read_to_string(&unit).map(|c| c == new_unit).unwrap_or(false);
+            if already && service_active(Platform::Linux) {
+                println!("dream is already up — nothing to do");
+                print_url(&cfg);
+                return Ok(());
+            }
             fs::create_dir_all(unit.parent().unwrap())?;
-            fs::write(&unit, systemd_unit(&args)?)
+            fs::write(&unit, &new_unit)
                 .with_context(|| format!("cannot write {}", unit.display()))?;
             systemctl(&["daemon-reload"])?;
             let _ = systemctl(&["disable", "--now", "dream.service"]);
@@ -281,18 +326,6 @@ pub fn up(cli: &Cli) -> anyhow::Result<()> {
     // foreign listener — require both the service manager reporting the
     // unit active AND the port answering.
     let deadline = Instant::now() + Duration::from_secs(30);
-    let service_active = |p: Platform| -> bool {
-        match p {
-            Platform::Macos => Command::new("/bin/launchctl")
-                .args(["print", &format!("gui/{}/{}", uid().unwrap_or_default(), LABEL)])
-                .output()
-                .map(|o| o.status.success())
-                .unwrap_or(false),
-            Platform::Linux => systemd_out(&["is-active", "dream.service"])
-                .map(|o| o.status.success())
-                .unwrap_or(false),
-        }
-    };
     loop {
         if service_active(platform)
             && TcpStream::connect((admin_host(&cfg).as_str(), cfg.port)).is_ok()
@@ -311,12 +344,11 @@ pub fn up(cli: &Cli) -> anyhow::Result<()> {
             return Ok(());
         }
         if Instant::now() > deadline {
-            println!("dream service installed but the port did not come up within 30s");
-            match platform {
-                Platform::Macos => println!("check {} for the cause", log_dir()?.join("err.log").display()),
-                Platform::Linux => println!("check `journalctl --user -u dream` for the cause"),
-            }
-            return Ok(());
+            let hint = match platform {
+                Platform::Macos => format!("check {} for the cause", log_dir()?.join("err.log").display()),
+                Platform::Linux => "check `journalctl --user -u dream` for the cause".into(),
+            };
+            return Err(anyhow!("service installed but the port did not come up within 30s — {hint}"));
         }
         std::thread::sleep(Duration::from_millis(250));
     }
@@ -393,13 +425,22 @@ pub fn status(cli: &Cli) -> anyhow::Result<()> {
 }
 
 /// `dream restart` — kickstart the agent.
-pub fn restart() -> anyhow::Result<()> {
+pub fn restart(cli: &Cli) -> anyhow::Result<()> {
     match platform()? {
         Platform::Macos => launchctl(&["kickstart", "-k", &service()?])?,
         Platform::Linux => systemctl(&["restart", "dream.service"])?,
     }
-    println!("dream restarted");
-    Ok(())
+    // Give the rebound port a moment to answer before reporting success.
+    let cfg = Config::load(cli)?;
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while Instant::now() < deadline {
+        if TcpStream::connect((admin_host(&cfg).as_str(), cfg.port)).is_ok() {
+            println!("dream restarted");
+            return Ok(());
+        }
+        std::thread::sleep(Duration::from_millis(250));
+    }
+    Err(anyhow!("restart issued but the port did not come back within 30s"))
 }
 
 /// `dream logs [-f]` — cat/tail the service logs (launchd files on
@@ -448,7 +489,7 @@ pub fn logs(follow: bool) -> anyhow::Result<()> {
 /// `dream url` — reprint the token URL.
 pub fn url(cli: &Cli) -> anyhow::Result<()> {
     let cfg = Config::load(cli)?;
-    match read_token(&cfg) {
+    match read_service_token(&cfg) {
         Some(token) => {
             println!("http://{}:{}/?token={token}", admin_host_display(&cfg), cfg.port);
             Ok(())
@@ -589,8 +630,8 @@ pub fn doctor(cli: &Cli) -> anyhow::Result<()> {
         .find_map(|bin| Command::new(bin).arg("status").output().ok());
     match ts {
         Some(o) if o.status.success() => checks.push((true, "tailscale connected".into())),
-        Some(_) => checks.push((false, "tailscale installed but not connected".into())),
-        None => checks.push((false, "tailscale not installed".into())),
+        Some(_) => checks.push((true, "tailscale installed but not logged in".into())),
+        None => checks.push((true, "tailscale not installed (optional — loopback-only is fine)".into())),
     }
 
     finish_doctor(checks)

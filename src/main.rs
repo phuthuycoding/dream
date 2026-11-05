@@ -25,7 +25,7 @@ async fn main() -> anyhow::Result<()> {
         Some(dream::cli::Action::Up) => return dream::daemon::up(&cli),
         Some(dream::cli::Action::Down) => return dream::daemon::down(),
         Some(dream::cli::Action::Status) => return dream::daemon::status(&cli),
-        Some(dream::cli::Action::Restart) => return dream::daemon::restart(),
+        Some(dream::cli::Action::Restart) => return dream::daemon::restart(&cli),
         Some(dream::cli::Action::Logs { follow }) => return dream::daemon::logs(*follow),
         Some(dream::cli::Action::Url) => return dream::daemon::url(&cli),
         Some(dream::cli::Action::Ps) => return dream::daemon::ps(&cli),
