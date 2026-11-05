@@ -44,7 +44,8 @@ test('TC-017: auth gate first, then dashboard lists sessions', async ({ context,
   const card = page.locator('.session-card', { hasText: 'dash-listed' });
   await expect(card).toBeVisible();
   await expect(card.locator('.badge')).toHaveText('live');
-  await expect(card.locator('.session-meta')).toContainText(s.id);
+  // FR-006: cards show the short id (first 8 chars); full id is in the title attr.
+  await expect(card.locator('.session-meta')).toContainText(s.id.slice(0, 8));
 });
 
 test('TC-022: kill, rename, delete through the UI; bell raises the attention badge', async ({

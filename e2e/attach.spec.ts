@@ -47,15 +47,17 @@ test('TC-018: create + attach + echo + resize propagates', async ({ context, dae
   // The pty now reports a geometry the client pushed. (Fit can fire more
   // than once while layout settles, so the assertion is membership in the
   // sent r-frame set rather than equality with the last one.)
+  // Tag the output so other "dd dd" text in scrollback (timestamps)
+  // cannot shadow the real stty pair.
   const lastSttyPair = () =>
     page.evaluate(() => {
-      const m = /(\d+) (\d+)/g;
+      const m = /SZ\[(\d+) (\d+)\]/g;
       const text = (window as any).__ws.text();
       let last: string | null = null;
-      for (let mm = m.exec(text); mm; mm = m.exec(text)) last = mm[0];
+      for (let mm = m.exec(text); mm; mm = m.exec(text)) last = `${mm[1]} ${mm[2]}`;
       return last;
     });
-  await runInTerminal(page, 'stty size');
+  await runInTerminal(page, "stty size | sed 's/^/SZ[/' | sed 's/$/]/'");
   await expect.poll(lastSttyPair).not.toBeNull();
   const stty = await lastSttyPair();
   expect(await sentResizePairs(page)).toContain(stty);
