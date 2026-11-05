@@ -10,7 +10,8 @@
 //! Lifecycle note: this map is the attach layer's view of "which sessions
 //! have a running shell". Marking the registry Dead, evicting runtimes on
 //! session delete, and API-driven kill are TASK-009's job; a runtime whose
-//! shell exited is simply replaced on the next attach to a `Live` session.
+//! shell exited is replaced through the lifecycle layer's spawn path on
+//! the next attach to a `Live` session, never by the attach itself.
 
 use std::collections::HashMap;
 use std::io;
@@ -26,7 +27,6 @@ use tracing::warn;
 use crate::model::Session;
 use crate::pty::PtyHandle;
 use crate::replay::log::{Event, ReplayLog};
-use crate::replay::reader;
 use crate::vt::emulator::VtEmu;
 
 /// Terminal geometry assumed until a client sends its first `r` frame.
@@ -167,16 +167,16 @@ fn runtimes() -> &'static AsyncMutex<HashMap<String, Arc<SessionRuntime>>> {
     RUNTIMES.get_or_init(|| AsyncMutex::new(HashMap::new()))
 }
 
-/// Resolve the runtime to attach `session` to, spawning its shell when no
-/// live runtime exists. Returns the runtime plus the scrollback payloads
-/// the attach must replay before the snapshot:
-///
-/// - live runtime → the newest retained tail of its replay log;
-/// - fresh spawn → the tail of the log as it existed just before spawn
-///   (spawn truncates the log for the new shell, so it is read first).
+/// Resolve the live runtime to attach `session` to, returning it with the
+/// newest retained tail of its replay log as scrollback — or `None` when
+/// the session has none. This never spawns: a runtime may only enter the
+/// shared map through [`spawn_fresh`], which the lifecycle layer always
+/// follows with `register`, so every live shell carries a monitor. An
+/// attach that finds none fails and retries through the route's
+/// manager-backed spawn.
 pub async fn attach_runtime(
     session: &Session,
-) -> anyhow::Result<(Arc<SessionRuntime>, Vec<Vec<u8>>)> {
+) -> anyhow::Result<Option<(Arc<SessionRuntime>, Vec<Vec<u8>>)>> {
     let mut guard = runtimes().lock().await;
     if let Some(rt) = guard.get(&session.id) {
         if rt.is_alive() {
@@ -189,26 +189,21 @@ pub async fn attach_runtime(
             .await
             .context("scrollback task failed to join")?
             .context("read retained log tail")?;
-            return Ok((rt.clone(), scrollback));
+            return Ok(Some((rt.clone(), scrollback)));
         }
-        // Registry says Live but the previous shell is gone: the runtime
-        // is stale, so the attach spawns a replacement shell.
+        // Registry may still say Live while the shell is gone: the stale
+        // runtime is dropped; its replacement is the lifecycle layer's
+        // call, not this attach's.
         guard.remove(&session.id);
     }
-    let scrollback_session = session.clone();
-    let scrollback =
-        tokio::task::spawn_blocking(move || pre_spawn_scrollback(&scrollback_session))
-            .await
-            .context("pre-spawn scrollback task failed to join")?;
-    let rt = spawn(session).await?;
-    guard.insert(session.id.clone(), rt.clone());
-    Ok((rt, scrollback))
+    Ok(None)
 }
 
 /// Spawn a fresh shell for `session` and swap it into the shared map,
 /// killing any prior runtime first — a respawn or daemon-restart
-/// resurrect must never leave two shells on one session. The lifecycle
-/// layer's spawn path; attaches keep using [`attach_runtime`]'s reuse.
+/// resurrect must never leave two shells on one session. The only path
+/// that inserts into the shared map; every caller in the lifecycle layer
+/// registers the returned runtime so it is monitored.
 pub(crate) async fn spawn_fresh(session: &Session) -> anyhow::Result<Arc<SessionRuntime>> {
     let mut guard = runtimes().lock().await;
     if let Some(old) = guard.remove(&session.id) {
@@ -221,39 +216,20 @@ pub(crate) async fn spawn_fresh(session: &Session) -> anyhow::Result<Arc<Session
     Ok(rt)
 }
 
-/// The runtime currently registered for `session_id`, if any. Lets the
-/// lifecycle layer confirm it still owns a session's shell before acting
-/// on that shell's exit.
-pub(crate) async fn get_runtime(session_id: &str) -> Option<Arc<SessionRuntime>> {
-    runtimes().lock().await.get(session_id).cloned()
+/// The shared runtime-map lock. The lifecycle layer holds it across a
+/// "still this session's shell" check and the registry write that follows,
+/// so a `spawn_fresh` swap cannot land between the check and the write —
+/// a respawn's persisted `Live` would then be overwritten by a stale
+/// `Dead` from the retired shell's monitor.
+pub(crate) async fn lock_runtimes(
+) -> tokio::sync::MutexGuard<'static, HashMap<String, Arc<SessionRuntime>>> {
+    runtimes().lock().await
 }
 
 /// Evict `session_id`'s runtime from the shared map so a later attach can
 /// never land on it; retiring the returned runtime is the caller's job.
 pub(crate) async fn detach_runtime(session_id: &str) -> Option<Arc<SessionRuntime>> {
     runtimes().lock().await.remove(session_id)
-}
-
-/// Tail of the on-disk log before `spawn` truncates it — the scrollback a
-/// first attach sees for a session whose earlier output is still retained
-/// (e.g. a respawned one). A missing or unreadable log means none.
-fn pre_spawn_scrollback(session: &Session) -> Vec<Vec<u8>> {
-    let events = match reader::read_events(&session.log_path) {
-        Ok(events) => events,
-        Err(_) => return Vec::new(),
-    };
-    let outputs = output_payloads(events);
-    // Keep the newest whole payloads within the scrollback budget.
-    let mut used = 0usize;
-    let mut from = outputs.len();
-    for (i, bytes) in outputs.iter().enumerate().rev() {
-        if from != outputs.len() && used + bytes.len() > SCROLLBACK_TAIL_BYTES as usize {
-            break;
-        }
-        used += bytes.len();
-        from = i;
-    }
-    outputs[from..].to_vec()
 }
 
 /// Spawn `session.cmd` on a pty, open its fresh replay log, and start the

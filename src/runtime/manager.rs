@@ -8,7 +8,8 @@
 //! bell/idle attention tracking, and a periodic retention enforcer.
 //!
 //! Per session the manager keeps a `SessionEntry` (runtime + attention
-//! flag) and runs a monitor task on the runtime's broadcast. The monitor
+//! flag + last-output instant) and runs a monitor task on the runtime's
+//! broadcast. The monitor
 //! is what observes a natural exit: on `Ended` it persists `Dead` — but
 //! only when the shared map still names *this* runtime for the session,
 //! so a monitor retired by respawn/resurrect/kill cannot stamp `Dead`
@@ -39,11 +40,14 @@ pub const DEFAULT_IDLE_ATTENTION: Duration = Duration::from_secs(30);
 const MIN_TICK: Duration = Duration::from_millis(10);
 const MAX_TICK: Duration = Duration::from_secs(5);
 
-/// One managed session: its live runtime plus the attention flag the
-/// monitor task flips and `spawn_on_attach` clears.
+/// One managed session: its live runtime, the attention flag the monitor
+/// task flips and `spawn_on_attach` clears, and the last-output instant
+/// the idle check measures from — reset on attach alongside the flag so
+/// a cleared flag is not re-armed by a stale timestamp.
 struct SessionEntry {
     rt: Arc<SessionRuntime>,
     attention: AtomicBool,
+    last_output: Mutex<Instant>,
 }
 
 /// Lifecycle manager for one data dir. `entries` is shared with the
@@ -75,17 +79,24 @@ impl RuntimeManager {
 
     /// Attach-route call: the session's live runtime, spawning only when
     /// none exists. Never spawns for a `Dead` session. Clears the
-    /// attention flag — attaching is the acknowledgement.
+    /// attention flag and restarts the idle clock — attaching is the
+    /// acknowledgement.
     pub async fn spawn_on_attach(&self, session: &Session) -> anyhow::Result<Arc<SessionRuntime>> {
         anyhow::ensure!(
             session.status != Status::Dead,
             "session {} is dead; respawn it first",
             session.id
         );
-        let (rt, _scrollback) = ws_runtime::attach_runtime(session).await?;
-        self.register(&session.id, rt.clone())
-            .attention
-            .store(false, Ordering::SeqCst);
+        let rt = match ws_runtime::attach_runtime(session).await? {
+            Some((rt, _scrollback)) => rt,
+            // No live runtime in the shared map — a stale shell died or
+            // the create-time spawn failed. The fresh spawn registers its
+            // monitor below like every other manager spawn.
+            None => ws_runtime::spawn_fresh(session).await?,
+        };
+        let entry = self.register(&session.id, rt.clone());
+        entry.attention.store(false, Ordering::SeqCst);
+        *lock(&entry.last_output) = Instant::now();
         Ok(rt)
     }
 
@@ -215,6 +226,7 @@ impl RuntimeManager {
         let entry = Arc::new(SessionEntry {
             rt: rt.clone(),
             attention: AtomicBool::new(false),
+            last_output: Mutex::new(Instant::now()),
         });
         // Subscribe before the spawn returns so output produced between
         // now and the monitor task's first poll is not missed — the bell
@@ -239,7 +251,6 @@ impl RuntimeManager {
         let idle_after = self.idle_attention_after;
         let entries = self.entries.clone();
         tokio::spawn(async move {
-            let mut last_output = Instant::now();
             loop {
                 // Once flagged, the flag holds until attach clears it —
                 // keep waking occasionally only to notice a missed exit.
@@ -247,13 +258,13 @@ impl RuntimeManager {
                     MAX_TICK
                 } else {
                     idle_after
-                        .saturating_sub(last_output.elapsed())
+                        .saturating_sub(lock(&entry.last_output).elapsed())
                         .clamp(MIN_TICK, MAX_TICK)
                 };
                 tokio::select! {
                     event = rx.recv() => match event {
                         Ok(LiveEvent::Output(bytes)) => {
-                            last_output = Instant::now();
+                            *lock(&entry.last_output) = Instant::now();
                             if bytes.contains(&0x07) {
                                 flag_attention(&entry);
                             }
@@ -271,7 +282,7 @@ impl RuntimeManager {
                             retire_dead(&entries, &data_dir, &session_id, &entry).await;
                             return;
                         }
-                        if last_output.elapsed() >= idle_after {
+                        if lock(&entry.last_output).elapsed() >= idle_after {
                             flag_attention(&entry);
                         }
                     }
@@ -299,17 +310,25 @@ fn flag_attention(entry: &SessionEntry) {
 
 /// Persist `Dead` for a runtime that just ended — but only while the
 /// shared map still names this runtime for the session. `spawn_fresh`
-/// swaps the map entry before the old shell finishes dying, and `kill`
-/// `detach_runtime` remove it first; in both cases this monitor is stale
+/// swaps the map entry before the old shell finishes dying, and `kill`'s
+/// `detach_runtime` removes it first; in both cases this monitor is stale
 /// and must not stamp `Dead` over a newer or already-handled record.
+///
+/// The check and the mark run inside one hold of the shared-map lock:
+/// a respawn/resurrect swaps the map under that same lock and only then
+/// persists `Live`, so a `Dead` taken while the map still names this
+/// runtime cannot be overtaken by a newer shell's `Live` — either the
+/// swap happened first (the check fails and no mark is written) or the
+/// mark lands first and the respawn's `Live` correctly lands last.
 async fn retire_dead(
     entries: &Mutex<HashMap<String, Arc<SessionEntry>>>,
     data_dir: &Path,
     session_id: &str,
     entry: &Arc<SessionEntry>,
 ) {
-    match ws_runtime::get_runtime(session_id).await {
-        Some(current) if Arc::ptr_eq(&current, &entry.rt) => {}
+    let guard = ws_runtime::lock_runtimes().await;
+    match guard.get(session_id) {
+        Some(current) if Arc::ptr_eq(current, &entry.rt) => {}
         _ => return,
     }
     {
@@ -323,7 +342,9 @@ async fn retire_dead(
     }
     let dir = data_dir.to_path_buf();
     let id = session_id.to_string();
-    match tokio::task::spawn_blocking(move || mark_dead(&dir, &id)).await {
+    let marked = tokio::task::spawn_blocking(move || mark_dead(&dir, &id)).await;
+    drop(guard);
+    match marked {
         Ok(Ok(())) => debug!(session_id, "session marked dead after pty exit"),
         Ok(Err(err)) => warn!(session_id, error = %err, "cannot persist dead mark"),
         Err(err) => warn!(session_id, error = %err, "dead-mark task failed to join"),

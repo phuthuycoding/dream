@@ -40,9 +40,15 @@ async fn run(mut socket: WebSocket, session: &Session) -> anyhow::Result<()> {
 }
 
 /// Live path: scrollback → snapshot → live stream, input and resize back
-/// to the shell.
+/// to the shell. The route already spawned through the manager
+/// (`spawn_on_attach`), so a live runtime must be registered — spawning
+/// here would produce a shell no monitor watches (no dead-mark, no
+/// attention). A missing runtime fails the attach; the client retries
+/// the route, which retries the manager spawn.
 async fn live_attach(socket: &mut WebSocket, session: &Session) -> anyhow::Result<()> {
-    let (rt, scrollback) = runtime::attach_runtime(session).await?;
+    let Some((rt, scrollback)) = runtime::attach_runtime(session).await? else {
+        anyhow::bail!("session {} has no live runtime to attach", session.id);
+    };
     for bytes in scrollback {
         send(socket, Frame::Output(bytes)).await?;
     }
