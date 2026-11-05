@@ -102,15 +102,12 @@ test('first run prints the authed URL + tailscale guidance; restart reuses the t
 });
 
 // BUG-E2E-001 tracking test (helpers.ts has the full write-up): the
-// share-link URL must bootstrap the whole SPA — but require_token 401s
-// every subresource (<script>/<link> can't send Bearer), so today the
-// page loads index.html and then dies: no CSS, no JS, no token adoption.
-// This test fails until the product fixes the auth transport; the rest of
-// the suite works around it via installAuthShim.
-test('share-link URL boots the SPA — BUG-E2E-001', async ({ page, daemon }) => {
-  test.fail(true, 'BUG-E2E-001: gated subresources 401 — SPA cannot boot in a real browser');
+// share-link URL must bootstrap the whole SPA. BUG-E2E-001 (gated
+// subresources 401'd, SPA couldn't boot) is fixed — static assets now
+// serve unauthenticated while /api/* and WS stay token-gated.
+test('share-link URL boots the SPA — BUG-E2E-001 fixed', async ({ page, daemon }) => {
   await page.goto(`${daemon.baseUrl}/?token=${daemon.token}`);
-  // Only /app.js (which 401s today) adopts the token into localStorage.
+  // app.js adopts the token from the URL into localStorage.
   await expect
     .poll(() => page.evaluate(() => localStorage.getItem('webterm.token')))
     .toBe(daemon.token);
