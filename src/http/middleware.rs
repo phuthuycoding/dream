@@ -1,4 +1,4 @@
-//! Bearer-token gate applied to every route, including the WS upgrade.
+//! Bearer-token gate on `/api/*` and the WS upgrade; the static shell is public.
 
 use axum::{
     extract::{Request, State},
@@ -9,33 +9,33 @@ use axum::{
 
 use crate::http::routes::AppState;
 
-/// Reject with 401 unless the request carries the token either as
-/// `Authorization: Bearer <token>` or as a `?token=` query parameter on the
-/// two route classes that cannot send headers: WS-upgrade requests (the
-/// browser WS client) and GETs to non-`/api/` routes (the share-link that
-/// bootstraps index.html, FR-007). `/api/*` stays Bearer-only so the secret
-/// never lands in REST URLs.
+/// The static asset shell is not secret: browsers cannot attach `Bearer`
+/// or `?token=` to the `<script src>` / `<link>` subresource fetches that
+/// boot the SPA (BUG-E2E-001), so GETs outside `/api/` pass unauthenticated
+/// — a `?token=` share link still works, it is simply unnecessary.
+/// Everything else — all of `/api/*` plus non-GET requests — requires
+/// `Authorization: Bearer <token>`, or `?token=` on the WS upgrade whose
+/// browser client cannot set headers.
 pub async fn require_token(
     State(state): State<AppState>,
     request: Request,
     next: Next,
 ) -> Response {
-    if is_authorized(&request, &state.token) {
+    if is_static_get(&request) || is_authorized(&request, &state.token) {
         next.run(request).await
     } else {
         StatusCode::UNAUTHORIZED.into_response()
     }
 }
 
-fn is_authorized(request: &Request, token: &str) -> bool {
-    bearer_token(request) == Some(token)
-        || (accepts_query_token(request) && query_token(request) == Some(token))
+/// GETs outside `/api/` resolve to the public static shell.
+fn is_static_get(request: &Request) -> bool {
+    request.method() == Method::GET && !request.uri().path().starts_with("/api/")
 }
 
-/// `?token=` is honoured only on WS upgrades and on GETs outside `/api/`.
-fn accepts_query_token(request: &Request) -> bool {
-    is_ws_upgrade(request)
-        || (request.method() == Method::GET && !request.uri().path().starts_with("/api/"))
+fn is_authorized(request: &Request, token: &str) -> bool {
+    bearer_token(request) == Some(token)
+        || (is_ws_upgrade(request) && query_token(request) == Some(token))
 }
 
 /// True when the request asks for a websocket upgrade.

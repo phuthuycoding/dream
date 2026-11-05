@@ -1,7 +1,8 @@
 //! REST + WS + static routes for the session API.
 //!
-//! `build_router` is the single entry point: every route — including the WS
-//! upgrade and the static fallback — sits behind the bearer-token gate.
+//! `build_router` is the single entry point: every `/api/` route — including
+//! the WS upgrade — sits behind the bearer-token gate; the static fallback
+//! serves unauthenticated so the SPA shell can bootstrap (BUG-E2E-001).
 
 use std::path::PathBuf;
 use std::sync::Arc;
