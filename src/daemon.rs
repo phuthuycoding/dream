@@ -280,7 +280,7 @@ pub fn up(cli: &Cli) -> anyhow::Result<()> {
     // The token file persists across runs and a bare port probe can hit a
     // foreign listener — require both the service manager reporting the
     // unit active AND the port answering.
-    let deadline = Instant::now() + Duration::from_secs(15);
+    let deadline = Instant::now() + Duration::from_secs(30);
     let service_active = |p: Platform| -> bool {
         match p {
             Platform::Macos => Command::new("/bin/launchctl")
@@ -377,7 +377,7 @@ pub fn status(cli: &Cli) -> anyhow::Result<()> {
             None => "unknown (systemctl missing)".into(),
         },
     };
-    if state == "inactive" || state == "not running" || state.starts_with("not running") || state == "dead" || state == "failed" || state.starts_with("unknown") {
+    if state.starts_with("not running") || state == "inactive" || state == "dead" || state == "failed" || state.starts_with("unknown") {
         println!("dream is not running ({state})");
         println!("start it: dream up");
         return Ok(());
@@ -475,7 +475,7 @@ pub fn ps(cli: &Cli) -> anyhow::Result<()> {
     println!("{:<38} {:<24} {:<10} cmd", "id", "name", "status");
     for s in &sessions {
         let id = s["id"].as_str().unwrap_or("?");
-        let short = &id[..id.len().min(8)];
+        let short: String = id.chars().take(8).collect();
         let clean = |v: &str| -> String { v.chars().filter(|c| !c.is_control()).collect() };
         let name = clean(s["name"].as_str().unwrap_or("?"));
         let status = if s["resurrected"].as_bool() == Some(true) {
