@@ -200,11 +200,9 @@ async fn ws_attach(
     Path(id): Path<String>,
 ) -> Response {
     match registry(&state).and_then(|reg| session_or_404(&reg, &id)) {
-        Ok(_) => ws.on_upgrade(attach).into_response(),
+        Ok(session) => ws
+            .on_upgrade(|socket| crate::ws::attach::attach(socket, session))
+            .into_response(),
         Err(err) => err.into_response(),
     }
 }
-
-/// Placeholder attach: the 101 handshake already completed, so dropping the
-/// socket ends the connection cleanly until TASK-007 streams a live PTY.
-async fn attach(_socket: WebSocket) {}
