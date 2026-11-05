@@ -3,6 +3,7 @@
 //! as soon as its files land; main.rs stays a thin CLI entry.
 
 pub mod cli;
+pub mod model;
 pub mod config;
 pub mod pty;
 pub mod state;
