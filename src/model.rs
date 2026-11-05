@@ -30,5 +30,6 @@ pub struct Session {
     /// `<data_dir>/sessions/<id>/replay.log`.
     pub log_path: PathBuf,
     /// Set when the session was resurrected after a daemon restart.
+    #[serde(default)]
     pub resurrected: bool,
 }

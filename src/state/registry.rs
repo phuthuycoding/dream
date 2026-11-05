@@ -6,7 +6,7 @@
 //! (renamed aside) — startup load never fails on a single bad session.
 
 use std::fs;
-use std::io::ErrorKind;
+use std::io::{ErrorKind, Write};
 use std::path::{Path, PathBuf};
 
 use anyhow::Context;
@@ -104,26 +104,30 @@ impl Registry {
         setup_script: Option<String>,
     ) -> anyhow::Result<()> {
         let idx = self.index_of(id)?;
-        {
-            let session = &mut self.sessions[idx];
-            if let Some(name) = name {
-                session.name = name;
-            }
-            if let Some(cwd) = cwd {
-                session.cwd = cwd;
-            }
-            if let Some(script) = setup_script {
-                session.setup_script = Some(script);
-            }
+        let mut session = self.sessions[idx].clone();
+        if let Some(name) = name {
+            session.name = name;
         }
-        save_session(&self.session_dir(id), &self.sessions[idx])
+        if let Some(cwd) = cwd {
+            session.cwd = cwd;
+        }
+        if let Some(script) = setup_script {
+            session.setup_script = Some(script);
+        }
+        // Persist before mutating memory so a failed save cannot diverge.
+        save_session(&self.session_dir(id), &session)?;
+        self.sessions[idx] = session;
+        Ok(())
     }
 
     /// Persist `Dead` status; the session stays listed until `delete`.
     pub fn mark_dead(&mut self, id: &str) -> anyhow::Result<()> {
         let idx = self.index_of(id)?;
-        self.sessions[idx].status = Status::Dead;
-        save_session(&self.session_dir(id), &self.sessions[idx])
+        let mut session = self.sessions[idx].clone();
+        session.status = Status::Dead;
+        save_session(&self.session_dir(id), &session)?;
+        self.sessions[idx] = session;
+        Ok(())
     }
 
     /// Persist `Live` status on a dead session. Spawning the replacement shell
@@ -131,8 +135,11 @@ impl Registry {
     /// transition.
     pub fn respawn(&mut self, id: &str) -> anyhow::Result<()> {
         let idx = self.index_of(id)?;
-        self.sessions[idx].status = Status::Live;
-        save_session(&self.session_dir(id), &self.sessions[idx])
+        let mut session = self.sessions[idx].clone();
+        session.status = Status::Live;
+        save_session(&self.session_dir(id), &session)?;
+        self.sessions[idx] = session;
+        Ok(())
     }
 
     /// Drop the session and remove its whole state dir, replay log included.
@@ -168,19 +175,25 @@ impl Registry {
 
     fn load_session_dir(&mut self, dir: &Path) {
         let file = dir.join(SESSION_FILE);
-        if !file.exists() {
-            // Orphan state dir (e.g. a stray replay.log) — nothing persisted.
-            return;
-        }
         let raw = match fs::read_to_string(&file) {
             Ok(raw) => raw,
+            // Orphan state dir (e.g. a stray replay.log) — nothing persisted.
+            Err(err) if err.kind() == ErrorKind::NotFound => return,
             Err(err) => {
                 warn!("skipping {}: cannot read session.json: {err}", dir.display());
                 return;
             }
         };
         match serde_json::from_str::<Session>(&raw) {
-            Ok(session) => self.sessions.push(session),
+            Ok(session) if id_matches_dir(&session, dir) => self.sessions.push(session),
+            Ok(session) => {
+                warn!(
+                    "quarantining {}: session id {:?} does not match its state dir",
+                    file.display(),
+                    session.id
+                );
+                quarantine(&file);
+            }
             Err(err) => {
                 warn!("quarantining corrupt {}: {err}", file.display());
                 quarantine(&file);
@@ -189,15 +202,40 @@ impl Registry {
     }
 }
 
-/// Write `session.json` atomically: tmp file in the same dir, then rename.
+/// A loaded session is trusted only when its id names its own state dir and is
+/// a well-formed Uuid (hence a single safe path component). Anything else could
+/// escape `sessions/` via `session_dir(&session.id)` — e.g. `delete("..")`.
+fn id_matches_dir(session: &Session, dir: &Path) -> bool {
+    match dir.file_name().and_then(|name| name.to_str()) {
+        Some(name) => session.id == name && Uuid::parse_str(&session.id).is_ok(),
+        None => false,
+    }
+}
+
+/// Write `session.json` atomically: a uniquely named tmp file in the same dir,
+/// fsync'd, then renamed; the dir is fsync'd so the rename itself is durable.
 fn save_session(dir: &Path, session: &Session) -> anyhow::Result<()> {
     let final_path = dir.join(SESSION_FILE);
-    let tmp_path = dir.join(format!("{SESSION_FILE}.tmp"));
+    let tmp_path = dir.join(format!("tmp-{}", Uuid::new_v4()));
     let body = serde_json::to_string_pretty(session).context("serialize session")?;
-    fs::write(&tmp_path, body)
-        .with_context(|| format!("cannot write {}", tmp_path.display()))?;
+    {
+        let mut tmp = fs::File::create(&tmp_path)
+            .with_context(|| format!("cannot write {}", tmp_path.display()))?;
+        tmp.write_all(body.as_bytes())
+            .with_context(|| format!("cannot write {}", tmp_path.display()))?;
+        tmp.sync_all()
+            .with_context(|| format!("cannot fsync {}", tmp_path.display()))?;
+    }
     fs::rename(&tmp_path, &final_path)
         .with_context(|| format!("cannot rename {}", tmp_path.display()))?;
+    match fs::File::open(dir) {
+        Ok(dir_file) => {
+            if let Err(err) = dir_file.sync_all() {
+                warn!("cannot fsync session dir {}: {err}", dir.display());
+            }
+        }
+        Err(err) => warn!("cannot open session dir {} for fsync: {err}", dir.display()),
+    }
     Ok(())
 }
 
