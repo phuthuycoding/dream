@@ -1,5 +1,5 @@
-//! `dream up|down|status|restart|logs|url|ps|doctor` — launchd agent
-//! lifecycle and local admin. macOS only; non-macOS prints a clear error.
+//! `dream up|down|status|restart|logs|url|ps|doctor` — service lifecycle
+//! (launchd on macOS, systemd --user on Linux) plus local admin.
 
 use std::fs;
 use std::io::Write;
@@ -30,7 +30,13 @@ fn log_dir() -> anyhow::Result<PathBuf> {
 }
 
 fn uid() -> anyhow::Result<String> {
-    let out = Command::new("id").arg("-u").output()?;
+    let out = Command::new("/usr/bin/id")
+        .arg("-u")
+        .output()
+        .or_else(|_| Command::new("id").arg("-u").output())?;
+    if !out.status.success() {
+        return Err(anyhow!("`id -u` failed"));
+    }
     Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
 }
 
@@ -68,7 +74,7 @@ fn systemd_unit_path() -> anyhow::Result<PathBuf> {
 }
 
 fn systemctl(args: &[&str]) -> anyhow::Result<()> {
-    let out = Command::new("systemctl")
+    let out = Command::new("/usr/bin/systemctl")
         .arg("--user")
         .args(args)
         .output()
@@ -83,17 +89,24 @@ fn systemctl(args: &[&str]) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn systemd_unit(program_args: &[String]) -> String {
+fn systemd_unit(program_args: &[String]) -> anyhow::Result<String> {
+    for a in program_args {
+        if a.chars().any(|c| c == '\n' || c == '\r' || (c.is_control() && c != '\t')) {
+            return Err(anyhow!("argument contains a control character — refusing to write the unit"));
+        }
+    }
     let exec = program_args
         .iter()
-        .map(|a| shell_quote(a))
+        // systemd expands % specifiers regardless of quoting — %% escapes.
+        .map(|a| a.replace('%', "%%"))
+        .map(|a| shell_quote(&a))
         .collect::<Vec<_>>()
         .join(" ");
-    format!(
+    Ok(format!(
         "[Unit]\nDescription=dream web terminal daemon\nAfter=network-online.target\n\n\
          [Service]\nExecStart={exec}\nRestart=always\nRestartSec=3\n\n\
          [Install]\nWantedBy=default.target\n"
-    )
+    ))
 }
 
 fn shell_quote(s: &str) -> String {
@@ -105,7 +118,7 @@ fn shell_quote(s: &str) -> String {
 }
 
 fn systemd_out(args: &[&str]) -> Option<std::process::Output> {
-    Command::new("systemctl")
+    Command::new("/usr/bin/systemctl")
         .arg("--user")
         .args(args)
         .output()
@@ -152,7 +165,7 @@ fn plist_xml(program_args: &[String], log_out: &str, log_err: &str) -> String {
 }
 
 fn launchctl(args: &[&str]) -> anyhow::Result<()> {
-    let out = Command::new("launchctl").args(args).output()?;
+    let out = Command::new("/bin/launchctl").args(args).output()?;
     if !out.status.success() {
         return Err(anyhow!(
             "launchctl {} failed: {}",
@@ -164,15 +177,30 @@ fn launchctl(args: &[&str]) -> anyhow::Result<()> {
 }
 
 fn read_token(cfg: &Config) -> Option<String> {
-    fs::read_to_string(cfg.data_dir.join("token"))
-        .ok()
-        .map(|t| t.trim().to_string())
-        .filter(|t| !t.is_empty())
+    let token = cfg
+        .auth_token
+        .clone()
+        .or_else(|| {
+            fs::read_to_string(cfg.data_dir.join("token"))
+                .ok()
+                .map(|t| t.trim().to_string())
+        })
+        .filter(|t| !t.is_empty())?;
+    // The token feeds an HTTP header verbatim — reject anything that could
+    // inject lines.
+    if token.chars().all(|c| c.is_ascii_alphanumeric() || "-_.".contains(c)) { Some(token) } else { None }
+}
+
+/// Host the daemon is reachable on for printed URLs and admin connections —
+/// loopback by default; for `0.0.0.0`/`::` binds loopback is still the
+/// reachable local admin address.
+fn admin_host(cfg: &Config) -> String {
+    if cfg.bind.is_unspecified() { "127.0.0.1".to_string() } else { cfg.bind.to_string() }
 }
 
 fn print_url(cfg: &Config) {
     match read_token(cfg) {
-        Some(token) => println!("  http://127.0.0.1:{}/?token={token}", cfg.port),
+        Some(token) => println!("  http://{}:{}/?token={token}", admin_host(cfg), cfg.port),
         None => println!("  (no token file at {} yet)", cfg.data_dir.display()),
     }
 }
@@ -182,9 +210,9 @@ pub fn up(cli: &Cli) -> anyhow::Result<()> {
     let platform = platform()?;
     let exe = std::env::current_exe().context("cannot resolve own binary path")?;
     let cfg = Config::load(cli)?;
-    let logs = log_dir()?;
-    fs::create_dir_all(&logs)?;
-    fs::create_dir_all(plist_path()?.parent().unwrap())?;
+    if cfg.auth_token.is_some() {
+        eprintln!("note: --auth-token/DREAM_AUTH_TOKEN is not stored in the service unit; the service generates/reads the token file");
+    }
 
     let mut args = vec![exe.display().to_string()];
     args.push("--port".into());
@@ -207,6 +235,14 @@ pub fn up(cli: &Cli) -> anyhow::Result<()> {
 
     match platform {
         Platform::Macos => {
+            let logs = log_dir()?;
+            fs::create_dir_all(&logs)?;
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                let _ = fs::set_permissions(&logs, std::fs::Permissions::from_mode(0o700));
+            }
+            fs::create_dir_all(plist_path()?.parent().unwrap())?;
             let plist = plist_path()?;
             fs::write(
                 &plist,
@@ -220,7 +256,7 @@ pub fn up(cli: &Cli) -> anyhow::Result<()> {
         Platform::Linux => {
             let unit = systemd_unit_path()?;
             fs::create_dir_all(unit.parent().unwrap())?;
-            fs::write(&unit, systemd_unit(&args))
+            fs::write(&unit, systemd_unit(&args)?)
                 .with_context(|| format!("cannot write {}", unit.display()))?;
             systemctl(&["daemon-reload"])?;
             let _ = systemctl(&["disable", "--now", "dream.service"]);
@@ -228,12 +264,18 @@ pub fn up(cli: &Cli) -> anyhow::Result<()> {
         }
     }
 
+    // The token file persists across runs, so reading it can't prove the
+    // service actually started — probe the port until it accepts.
     let deadline = Instant::now() + Duration::from_secs(15);
     loop {
-        if let Some(token) = read_token(&cfg) {
-            println!("dream is up (launchd agent {LABEL})");
-            println!("  http://127.0.0.1:{}/?token={token}", cfg.port);
-            println!("  logs: {}", logs.display());
+        if TcpStream::connect(format!("{}:{}", admin_host(&cfg), cfg.port)).is_ok() {
+            let mgr = match platform { Platform::Macos => "launchd agent", Platform::Linux => "systemd --user service" };
+            println!("dream is up ({mgr} {LABEL})");
+            print_url(&cfg);
+            match platform {
+                Platform::Macos => println!("  logs: {}", log_dir()?.display()),
+                Platform::Linux => println!("  logs: journalctl --user -u dream  (or: dream logs)"),
+            }
             println!("  stop: dream down");
             if cfg.bind.is_loopback() {
                 println!("{}", crate::http::tailscale::tailscale_guidance(cfg.port));
@@ -241,8 +283,11 @@ pub fn up(cli: &Cli) -> anyhow::Result<()> {
             return Ok(());
         }
         if Instant::now() > deadline {
-            println!("dream agent bootstrapped but no token appeared within 15s");
-            println!("check {} for the cause", logs.join("err.log").display());
+            println!("dream service installed but the port did not come up within 15s");
+            match platform {
+                Platform::Macos => println!("check {} for the cause", log_dir()?.join("err.log").display()),
+                Platform::Linux => println!("check `journalctl --user -u dream` for the cause"),
+            }
             return Ok(());
         }
         std::thread::sleep(Duration::from_millis(250));
@@ -282,7 +327,7 @@ pub fn down() -> anyhow::Result<()> {
 pub fn status(cli: &Cli) -> anyhow::Result<()> {
     let state = match platform()? {
         Platform::Macos => {
-            let out = Command::new("launchctl").args(["print", &service()?]).output()?;
+            let out = Command::new("/bin/launchctl").args(["print", &service()?]).output()?;
             if !out.status.success() {
                 println!("dream is not running (no launchd agent {LABEL})");
                 println!("start it: dream up");
@@ -296,11 +341,15 @@ pub fn status(cli: &Cli) -> anyhow::Result<()> {
         }
         Platform::Linux => match systemd_out(&["is-active", "dream.service"]) {
             Some(o) if o.status.success() => "running".into(),
-            Some(o) => String::from_utf8_lossy(&o.stdout).trim().to_string(),
+            Some(o) => {
+                let t = String::from_utf8_lossy(&o.stdout).trim().to_string();
+                let e = String::from_utf8_lossy(&o.stderr).trim().to_string();
+                if t.is_empty() { format!("not running{}", if e.is_empty() { "".into() } else { format!(" ({e})") }) } else { t }
+            }
             None => "unknown (systemctl missing)".into(),
         },
     };
-    if state == "inactive" || state == "not running" || state == "dead" || state.starts_with("unknown") {
+    if state == "inactive" || state == "not running" || state.starts_with("not running") || state == "dead" || state == "failed" || state.starts_with("unknown") {
         println!("dream is not running ({state})");
         println!("start it: dream up");
         return Ok(());
@@ -330,7 +379,7 @@ pub fn logs(follow: bool) -> anyhow::Result<()> {
         if follow {
             args.push("-f");
         }
-        let mut cmd = Command::new("journalctl")
+        let mut cmd = Command::new("/usr/bin/journalctl")
             .args(&args)
             .stdout(Stdio::inherit())
             .stderr(Stdio::inherit())
@@ -346,15 +395,16 @@ pub fn logs(follow: bool) -> anyhow::Result<()> {
         println!("no logs yet at {}", dir.display());
         return Ok(());
     }
-    for (name, path) in [("stdout", &out_log), ("stderr", &err_log)] {
-        if path.exists() {
-            println!("== {} ({} )==", name, path.display());
-            print!("{}", fs::read_to_string(path).unwrap_or_default());
-        }
+    let existing: Vec<&PathBuf> = [&out_log, &err_log].iter().filter(|p| p.exists()).copied().collect();
+    for path in &existing {
+        println!("== {} ==", path.display());
+        print!("{}", fs::read_to_string(path).unwrap_or_default());
     }
-    if follow {
-        let mut tail = Command::new("tail")
-            .args(["-f", &out_log.display().to_string(), &err_log.display().to_string()])
+    if follow && !existing.is_empty() {
+        let mut args = vec!["-f".to_string()];
+        args.extend(existing.iter().map(|p| p.display().to_string()));
+        let mut tail = Command::new("/usr/bin/tail")
+            .args(&args)
             .stdout(Stdio::inherit())
             .stderr(Stdio::inherit())
             .spawn()?;
@@ -368,7 +418,7 @@ pub fn url(cli: &Cli) -> anyhow::Result<()> {
     let cfg = Config::load(cli)?;
     match read_token(&cfg) {
         Some(token) => {
-            println!("http://127.0.0.1:{}/?token={token}", cfg.port);
+            println!("http://{}:{}/?token={token}", admin_host(&cfg), cfg.port);
             Ok(())
         }
         None => Err(anyhow!(
@@ -394,13 +444,14 @@ pub fn ps(cli: &Cli) -> anyhow::Result<()> {
     for s in &sessions {
         let id = s["id"].as_str().unwrap_or("?");
         let short = &id[..id.len().min(8)];
-        let name = s["name"].as_str().unwrap_or("?");
+        let clean = |v: &str| -> String { v.chars().filter(|c| !c.is_control()).collect() };
+        let name = clean(s["name"].as_str().unwrap_or("?"));
         let status = if s["resurrected"].as_bool() == Some(true) {
-            "resurrected"
+            "resurrected".to_string()
         } else {
-            s["status"].as_str().unwrap_or("?")
+            clean(s["status"].as_str().unwrap_or("?"))
         };
-        let cmd = s["cmd"].as_str().unwrap_or("?");
+        let cmd = clean(s["cmd"].as_str().unwrap_or("?"));
         println!("{short:<38} {name:<24.24} {status:<10} {cmd:.40}");
     }
     Ok(())
@@ -408,12 +459,12 @@ pub fn ps(cli: &Cli) -> anyhow::Result<()> {
 
 /// Minimal HTTP/1.1 GET against the loopback daemon (no new dep).
 fn http_get(cfg: &Config, path: &str, token: &str) -> anyhow::Result<String> {
-    let mut stream = TcpStream::connect(format!("127.0.0.1:{}", cfg.port))
+    let mut stream = TcpStream::connect(format!("{}:{}", admin_host(cfg), cfg.port))
         .context("cannot connect — is the daemon running? (dream status)")?;
     stream.set_read_timeout(Some(Duration::from_secs(10)))?;
     write!(
         stream,
-        "GET {path} HTTP/1.1\r\nHost: 127.0.0.1\r\nAuthorization: Bearer {token}\r\nConnection: close\r\n\r\n"
+        "GET {path} HTTP/1.1\r\nHost: {}:{}\r\nAuthorization: Bearer {token}\r\nConnection: close\r\n\r\n", admin_host(cfg), cfg.port
     )?;
     let mut buf = Vec::new();
     std::io::Read::read_to_end(&mut stream, &mut buf)?;
@@ -423,7 +474,10 @@ fn http_get(cfg: &Config, path: &str, token: &str) -> anyhow::Result<String> {
         .nth(1)
         .and_then(|c| c.parse().ok())
         .unwrap_or(0);
-    let body = text.split("\r\n\r\n").nth(1).unwrap_or("").to_string();
+    if text.to_lowercase().contains("transfer-encoding: chunked") {
+        return Err(anyhow!("chunked response not supported by the CLI client"));
+    }
+    let body = text.split_once("\r\n\r\n").map(|x| x.1).unwrap_or("").to_string();
     if status != 200 {
         return Err(anyhow!("GET {path} → HTTP {status}: {body:.200}"));
     }
@@ -436,10 +490,14 @@ pub fn doctor(cli: &Cli) -> anyhow::Result<()> {
     let mut checks: Vec<(bool, String)> = Vec::new();
 
     let agent_state = match platform() {
+        Err(err) => {
+            checks.push((false, format!("service platform unsupported: {err}")));
+            return finish_doctor(checks);
+        }
         Ok(Platform::Macos) => {
             let plist = plist_path()?;
             checks.push((plist.exists(), format!("plist {}", plist.display())));
-            Command::new("launchctl")
+            Command::new("/bin/launchctl")
                 .args(["print", &service()?])
                 .output()
                 .ok()
@@ -455,14 +513,15 @@ pub fn doctor(cli: &Cli) -> anyhow::Result<()> {
             let unit = systemd_unit_path()?;
             checks.push((unit.exists(), format!("unit {}", unit.display())));
             systemd_out(&["is-active", "dream.service"]).map(|o| {
-                String::from_utf8_lossy(&o.stdout).trim().to_string()
+                if o.status.success() { "active".to_string() }
+                else { String::from_utf8_lossy(&o.stdout).trim().to_string() }
             })
         }
-        Err(_) => None,
     };
-    checks.push((agent_state.as_deref() == Some("running"), format!("agent state = {}", agent_state.unwrap_or_else(|| "not running".into()))));
+    let running = matches!(agent_state.as_deref(), Some("running") | Some("active"));
+    checks.push((running, format!("service state = {}", agent_state.unwrap_or_else(|| "not running".into()))));
 
-    let port_ok = TcpStream::connect(format!("127.0.0.1:{}", cfg.port)).is_ok();
+    let port_ok = TcpStream::connect(format!("{}:{}", admin_host(&cfg), cfg.port)).is_ok();
     checks.push((port_ok, format!("port {} reachable", cfg.port)));
 
     let token_file = cfg.data_dir.join("token");
@@ -499,6 +558,10 @@ pub fn doctor(cli: &Cli) -> anyhow::Result<()> {
         None => checks.push((false, "tailscale not installed".into())),
     }
 
+    finish_doctor(checks)
+}
+
+fn finish_doctor(checks: Vec<(bool, String)>) -> anyhow::Result<()> {
     let mut fails = 0;
     for (ok, msg) in &checks {
         println!("{} {}", if *ok { "✓" } else { "✗" }, msg);
@@ -536,6 +599,25 @@ mod tests {
     fn plist_escapes_xml_chars() {
         let xml = plist_xml(&["/a&b/<x>".into()], "/o", "/e");
         assert!(xml.contains("/a&amp;b/&lt;x&gt;"));
+    }
+
+    #[test]
+    fn systemd_unit_escapes_percent_and_quotes() {
+        let xml = systemd_unit(&["/opt/dream".into(), "--data-dir".into(), "/home/x%h/data".into()]).unwrap();
+        assert!(xml.contains("ExecStart=/opt/dream --data-dir '/home/x%%h/data'"));
+        assert!(xml.contains("Restart=always"));
+        assert!(xml.contains("WantedBy=default.target"));
+    }
+
+    #[test]
+    fn systemd_unit_rejects_control_chars() {
+        assert!(systemd_unit(&["ok".into(), "evil\nExecStartPost=/bin/sh".into()]).is_err());
+    }
+
+    #[test]
+    fn shell_quote_plain_vs_special() {
+        assert_eq!(shell_quote("/a/b-c_d"), "/a/b-c_d");
+        assert_eq!(shell_quote("a b"), "'a b'");
     }
 
     #[test]

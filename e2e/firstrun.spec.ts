@@ -26,7 +26,7 @@ interface Spawned {
   kill: () => void;
 }
 
-function spawnWebterm(args: string[], cwd?: string): Spawned {
+function spawnDream(args: string[], cwd?: string): Spawned {
   const proc = spawn(DREAM_BIN, args, {
     stdio: ['ignore', 'pipe', 'pipe'],
     cwd,
@@ -58,19 +58,18 @@ async function waitForText(
   throw new Error(`no match for ${re}; captured:\n${text()}`);
 }
 
-test('first run prints the authed URL + tailscale guidance; restart reuses the token silently', async () => {
+test('first run on a pipe reports the token file (TTY still prints the URL); restart reuses the token silently', async () => {
   const dataDir = mkDataDir();
   const port = await getFreePort();
-  const first = spawnWebterm(['--port', String(port), '--data-dir', dataDir]);
+  const first = spawnDream(['--port', String(port), '--data-dir', dataDir]);
   try {
-    // "dream ready — open this URL once to authenticate:" + URL line.
-    const urlMatch = await waitForText(
-      first.stdoutText,
-      /http:\/\/127\.0\.0\.1:\d+\/\?token=([0-9a-f]+)/,
-    );
-    const token = urlMatch[1];
+    // Piped stdout is not a TTY — under launchd/systemd that same stream is
+    // a world-readable log, so the bearer token must never be printed
+    // there. TTY still gets "open this URL once" (interactive terminals).
+    await waitForText(first.stdoutText, /dream ready — token file at/);
+    expect(first.stdoutText()).not.toMatch(/\?token=/);
+    const token = readFileSync(path.join(dataDir, 'token'), 'utf8').trim();
     expect(token.length).toBeGreaterThanOrEqual(32);
-    expect(first.stdoutText()).toMatch(/dream ready — open this URL once/);
 
     // Persisted token matches; the file is owner-only (0600 on unix).
     const tokenFile = path.join(dataDir, 'token');
@@ -90,7 +89,7 @@ test('first run prints the authed URL + tailscale guidance; restart reuses the t
   }
 
   // Second run on the same data dir: token reused, URL not reprinted.
-  const second = spawnWebterm(['--port', String(port), '--data-dir', dataDir]);
+  const second = spawnDream(['--port', String(port), '--data-dir', dataDir]);
   try {
     await waitForText(second.stdoutText, /dream ready — token file at/);
     expect(second.stdoutText()).not.toMatch(/open this URL once/);
@@ -119,7 +118,7 @@ test('--public prints a loud warning; non-loopback without it refuses to bind', 
   const port = await getFreePort();
   try {
     // Refusal path: exits non-zero before binding.
-    const refused = spawnWebterm([
+    const refused = spawnDream([
       '--bind',
       '0.0.0.0',
       '--port',
@@ -137,7 +136,7 @@ test('--public prints a loud warning; non-loopback without it refuses to bind', 
     refused.kill();
 
     // --public: loud stderr warning, then it binds and serves.
-    const loud = spawnWebterm([
+    const loud = spawnDream([
       '--bind',
       '0.0.0.0',
       '--port',

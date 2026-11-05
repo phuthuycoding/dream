@@ -201,7 +201,7 @@ export async function installAuthShim(context: BrowserContext, token: string): P
  *  `window.__ws`. Must be installed before the first navigation. */
 export async function instrumentWs(page: Page): Promise<void> {
   await page.addInitScript(() => {
-    const dec = new TextDecoder('latin1');
+    const dec = new TextDecoder('utf-8');
     const inbound: Uint8Array[] = [];
     const sent: Uint8Array[] = [];
     const NativeWS = window.WebSocket;

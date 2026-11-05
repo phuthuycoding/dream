@@ -116,7 +116,7 @@ Certificates).
 
 ## Auto-start on macOS (launchd)
 
-Save as `~/Library/LaunchAgents/dev.dream.plist`, adjusting the binary
+`dream up` does this automatically — the manual recipe below is for advanced setups. Save as `~/Library/LaunchAgents/dev.dream.plist`, adjusting the binary
 and log paths (launchd does not expand `~` — use absolute paths):
 
 ```xml

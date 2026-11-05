@@ -69,8 +69,15 @@ async fn main() -> anyhow::Result<()> {
     }
 
     if auth.first_run {
-        println!("dream ready — open this URL once to authenticate:");
-        println!("  http://{addr}/?token={}", auth.token);
+        use std::io::IsTerminal;
+        if std::io::stdout().is_terminal() {
+            println!("dream ready — open this URL once to authenticate:");
+            println!("  http://{addr}/?token={}", auth.token);
+        } else {
+            // Under launchd/systemd stdout lands in a log other users can
+            // read — point at the 0600 token file instead of printing it.
+            println!("dream ready — token file at {}", cfg.data_dir.join("token").display());
+        }
     } else {
         println!("dream ready — token file at {}", cfg.data_dir.display());
     }

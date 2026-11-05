@@ -43,16 +43,16 @@ pub struct Cli {
 
 #[derive(clap::Subcommand, Debug)]
 pub enum Action {
-    /// Install and start the daemon as a macOS launchd agent (survives
-    /// logout and restarts; the same port/data-dir flags apply)
+    /// Install and start the daemon as a service — launchd agent on macOS,
+    /// systemd --user unit on Linux (the same port/data-dir flags apply)
     Up,
-    /// Stop the launchd agent and remove its plist
+    /// Stop the service and remove its unit
     Down,
-    /// Show whether the launchd agent is running and print the URL
+    /// Show whether the service is running and print the URL
     Status,
-    /// Restart the launchd agent
+    /// Restart the service
     Restart,
-    /// Show the daemon's launchd logs
+    /// Show the daemon's service logs
     Logs {
         /// Follow the log output (like tail -f)
         #[arg(short, long)]
