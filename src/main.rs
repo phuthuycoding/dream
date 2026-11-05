@@ -1,8 +1,6 @@
-mod cli;
-mod config;
-
 use anyhow::Context;
 use axum::{routing::get, Router};
+use webterm::{cli::Cli, config::Config};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -13,8 +11,8 @@ async fn main() -> anyhow::Result<()> {
         )
         .init();
 
-    let cli = cli::Cli::parse();
-    let cfg = config::Config::load(&cli)?;
+    let cli = Cli::parse();
+    let cfg = Config::load(&cli)?;
 
     let app = Router::new().route("/", get(|| async { "webterm" }));
 
