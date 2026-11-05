@@ -1,0 +1,197 @@
+//! WS attach handler: upgraded socket → retained scrollback → DEC-2026
+//! snapshot → live broadcast, with `i`→PTY stdin and `r`→PTY+VT resize.
+//!
+//! `http::routes::ws_attach` delegates here after the registry lookup:
+//! `ws.on_upgrade(|socket| attach(socket, session))`.
+//!
+//! Attach contract (order is part of the protocol):
+//! 1. retained log-tail scrollback as `o` frames,
+//! 2. one `s` snapshot frame,
+//! 3. live `o` stream until detach or an `e` end frame.
+//!
+//! A `Dead` session never spawns: its retained log replays, then one `e`
+//! frame names the ended state and offers the respawn route.
+
+use axum::extract::ws::{Message, WebSocket};
+use anyhow::Context;
+use tokio::sync::broadcast;
+use tracing::{debug, warn};
+
+use crate::model::{Session, Status};
+use crate::replay::log::Event;
+use crate::replay::reader;
+
+use super::frame::Frame;
+use super::runtime::{self, LiveEvent, SessionRuntime};
+
+/// `on_upgrade` entry point. Runs the attach to its end — detach, end
+/// frame, or a socket/spawn failure (logged, never fatal to the server).
+pub async fn attach(socket: WebSocket, session: Session) {
+    if let Err(err) = run(socket, &session).await {
+        warn!(session = %session.id, error = %err, "ws attach failed");
+    }
+}
+
+async fn run(mut socket: WebSocket, session: &Session) -> anyhow::Result<()> {
+    if session.status == Status::Dead {
+        dead_attach(&mut socket, session).await
+    } else {
+        live_attach(&mut socket, session).await
+    }
+}
+
+/// Live path: scrollback → snapshot → live stream, input and resize back
+/// to the shell. The route already spawned through the manager
+/// (`spawn_on_attach`), so a live runtime must be registered — spawning
+/// here would produce a shell no monitor watches (no dead-mark, no
+/// attention). A missing runtime fails the attach; the client retries
+/// the route, which retries the manager spawn.
+async fn live_attach(socket: &mut WebSocket, session: &Session) -> anyhow::Result<()> {
+    let Some((rt, scrollback)) = runtime::attach_runtime(session).await? else {
+        anyhow::bail!("session {} has no live runtime to attach", session.id);
+    };
+    for bytes in scrollback {
+        send(socket, Frame::Output(bytes)).await?;
+    }
+    // Subscribe and snapshot under one `vt` guard: a chunk landing in the
+    // gap would otherwise be sent in the snapshot AND replayed as a live
+    // `o` frame, printing twice.
+    let (mut rx, snapshot) = rt.attach_view();
+    send(socket, Frame::Snapshot(snapshot)).await?;
+
+    // The shell may have exited between `attach_runtime`'s liveness check
+    // and the subscribe inside `attach_view` — that `Ended` broadcast went
+    // out before `rx` existed, so without this check the client would wait
+    // on a live stream that can never deliver an end frame.
+    if !rt.is_alive() {
+        let notice = format!(
+            "session ended; respawn: POST /api/sessions/{}/respawn",
+            session.id
+        );
+        let _ = send(socket, Frame::End(notice.into_bytes())).await;
+        return Ok(());
+    }
+
+    loop {
+        tokio::select! {
+            msg = socket.recv() => match msg {
+                Some(Ok(Message::Binary(data))) => handle_client_frame(&rt, &data),
+                Some(Ok(Message::Close(_))) | None => return Ok(()),
+                // Text frames are not in the protocol; ping/pong is
+                // answered by the underlying tungstenite layer.
+                Some(Ok(_)) => {}
+                Some(Err(err)) => {
+                    debug!(session = %session.id, error = %err, "ws recv error; closing attach");
+                    return Ok(());
+                }
+            },
+            event = rx.recv() => match event {
+                Ok(LiveEvent::Output(bytes)) => send(socket, Frame::Output(bytes)).await?,
+                Ok(LiveEvent::Ended(notice)) => {
+                    // The end frame is best-effort — the peer may already
+                    // be gone; the attach ends either way.
+                    let _ = send(socket, Frame::End(notice.into_bytes())).await;
+                    return Ok(());
+                }
+                Ok(LiveEvent::Attention) => send(socket, Frame::Attention).await?,
+                Err(broadcast::error::RecvError::Lagged(skipped)) => {
+                    warn!(
+                        session = %session.id,
+                        skipped, "attach lagged behind live broadcast; resyncing with a snapshot"
+                    );
+                    // The skipped chunks are a permanent hole in the `o`
+                    // stream; resubscribe + resnapshot under one `vt`
+                    // guard (same invariant as the initial attach) so the
+                    // client screen resyncs instead.
+                    let (new_rx, snapshot) = rt.attach_view();
+                    rx = new_rx;
+                    send(socket, Frame::Snapshot(snapshot)).await?;
+                }
+                Err(broadcast::error::RecvError::Closed) => return Ok(()),
+            },
+        }
+    }
+}
+
+/// Dead path: replay the retained log tail, then end with a notice that
+/// names the ended state and offers the respawn route.
+async fn dead_attach(socket: &mut WebSocket, session: &Session) -> anyhow::Result<()> {
+    let mut exit_code: Option<i32> = None;
+    match read_dead_log(session).await {
+        Ok((outputs, exit)) => {
+            for bytes in outputs {
+                send(socket, Frame::Output(bytes)).await?;
+            }
+            exit_code = exit;
+        }
+        // A dead session without a readable log still gets its end frame.
+        Err(err) => {
+            warn!(
+                session = %session.id,
+                error = %err, "cannot read replay log for dead-session attach"
+            );
+        }
+    }
+    let notice = match exit_code {
+        Some(code) => format!(
+            "session '{}' ended (exit {code}); respawn: POST /api/sessions/{}/respawn",
+            session.name, session.id
+        ),
+        None => format!(
+            "session '{}' is dead; respawn: POST /api/sessions/{}/respawn",
+            session.name, session.id
+        ),
+    };
+    send(socket, Frame::End(notice.into_bytes())).await
+}
+
+/// Read the session's log off the executor (a dead log can be large and
+/// the read is blocking io) and return the output payloads of its newest
+/// whole events within the same scrollback budget live attaches get —
+/// plus the recorded exit code wherever it sits in the file.
+async fn read_dead_log(session: &Session) -> anyhow::Result<(Vec<Vec<u8>>, Option<i32>)> {
+    // `None` covers both a missing log and a path outside the session
+    // dir — the latter already logged its own specific warn.
+    let Some(log_path) = runtime::validated_log_path(session) else {
+        anyhow::bail!("no replay log inside the session dir");
+    };
+    let events = tokio::task::spawn_blocking(move || reader::read_events(&log_path))
+        .await
+        .context("dead-log read task failed to join")??;
+    let mut outputs = Vec::new();
+    let mut exit_code = None;
+    for event in events {
+        match event {
+            Event::Output(bytes) => outputs.push(bytes),
+            Event::Exit(code) => exit_code = Some(code),
+            Event::Resize { .. } | Event::Marker(_) => {}
+        }
+    }
+    Ok((
+        runtime::tail_within(outputs, runtime::SCROLLBACK_TAIL_BYTES),
+        exit_code,
+    ))
+}
+
+/// One inbound client frame: input to the pty, resize to pty + emulator +
+/// log. Anything else — a server opcode, an undecodable frame — is
+/// dropped: one bad frame must not kill the attach.
+fn handle_client_frame(rt: &SessionRuntime, data: &[u8]) {
+    match Frame::decode(data) {
+        Ok(Frame::Input(bytes)) => {
+            if let Err(err) = rt.write_input(&bytes) {
+                warn!(session_pty = %rt.pty_id(), error = %err, "pty input write failed");
+            }
+        }
+        Ok(Frame::Resize { cols, rows }) => rt.resize(cols, rows),
+        Ok(other) => debug!(frame = ?other, "client sent a server-side frame; dropped"),
+        Err(err) => debug!(error = %err, "undecodable client frame; dropped"),
+    }
+}
+
+async fn send(socket: &mut WebSocket, frame: Frame) -> anyhow::Result<()> {
+    socket
+        .send(Message::Binary(frame.encode().into()))
+        .await
+        .map_err(|err| anyhow::anyhow!("ws send failed: {err}"))
+}

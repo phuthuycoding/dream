@@ -1,0 +1,4 @@
+{"version":3,"term":{"cols":80,"rows":24}}
+[0.000000,"o","prompt$ "]
+[0.125000,"o","first output\r\n"]
+[0.250000,"o","this line was being written when the daemon

@@ -1,0 +1,37 @@
+[package]
+name = "webterm"
+version = "0.1.0"
+edition = "2021"
+description = "Single-binary web terminal — AI-agent workbench over the browser"
+license = "MIT"
+
+[dependencies]
+axum = { version = "0.8", features = ["ws"] }
+tokio = { version = "1", features = ["full"] }
+clap = { version = "4", features = ["derive"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+portable-pty = "0.9"
+rust-embed = { version = "8", features = ["axum-ex"] }
+mime_guess = "2"
+uuid = { version = "1", features = ["v4"] }
+chrono = { version = "0.4", features = ["serde"] }
+anyhow = "1"
+thiserror = "2"
+rand = "0.9"
+dirs = "6"
+vt100 = "0.16"
+
+[dev-dependencies]
+futures-util = "0.3"
+tempfile = "3"
+reqwest = { version = "0.12", features = ["json"] }
+tokio-tungstenite = "0.30"
+
+[profile.release]
+strip = true
+lto = true
+opt-level = "z"
+codegen-units = 1

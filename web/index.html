@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>webterm</title>
+  <link rel="stylesheet" href="/vendor/xterm.css" />
+  <link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+  <header id="topbar">
+    <span id="brand">webterm</span>
+    <span class="spacer"></span>
+    <button id="btn-logout" class="btn ghost" title="Forget the stored token">log out</button>
+  </header>
+
+  <main id="main">
+    <!-- Auth gate: shown when there is no usable token (FR-007). -->
+    <section id="view-gate" class="view hidden">
+      <form id="gate-form" class="card gate-card">
+        <h1>webterm</h1>
+        <p>Paste the access token (see the daemon's startup output).</p>
+        <input id="gate-token" type="password" autocomplete="off" placeholder="token" required />
+        <p id="gate-error" class="error hidden"></p>
+        <button type="submit" class="btn primary">Connect</button>
+      </form>
+    </section>
+
+    <!-- Dashboard: session list + lifecycle actions. -->
+    <section id="view-dashboard" class="view hidden">
+      <div class="toolbar">
+        <button id="btn-new" class="btn primary">+ new session</button>
+        <button id="btn-clean-all" class="btn" title="Reset every session's replay log">clean all logs</button>
+        <button id="btn-refresh" class="btn" title="Reload the session list">refresh</button>
+      </div>
+      <div id="session-list" class="session-list"></div>
+      <p id="dashboard-empty" class="muted hidden">No sessions yet — create one.</p>
+    </section>
+
+    <!-- Terminal: fullscreen xterm on attach. -->
+    <section id="view-terminal" class="view hidden">
+      <div id="term-header">
+        <button id="btn-back" class="btn ghost">&larr; back</button>
+        <span id="term-title" class="term-title"></span>
+        <span id="term-status" class="pill"></span>
+        <span class="spacer"></span>
+        <button id="btn-term-respawn" class="btn hidden">respawn</button>
+      </div>
+      <div id="term-wrap">
+        <div id="term-container"></div>
+        <div id="term-overlay" class="hidden">
+          <div class="card">
+            <p id="overlay-text"></p>
+            <div class="row">
+              <button id="btn-overlay-respawn" class="btn primary">respawn</button>
+              <button id="btn-overlay-back" class="btn">dashboard</button>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div id="softkeys">
+        <button class="softkey" data-key="esc">Esc</button>
+        <button class="softkey" data-key="tab">Tab</button>
+        <button class="softkey toggle" data-key="ctrl" id="softkey-ctrl">Ctrl</button>
+        <button class="softkey" data-key="left">&#8592;</button>
+        <button class="softkey" data-key="down">&#8595;</button>
+        <button class="softkey" data-key="up">&#8593;</button>
+        <button class="softkey" data-key="right">&#8594;</button>
+      </div>
+    </section>
+  </main>
+
+  <!-- Create / edit session modal (shared; cmd hidden in edit mode). -->
+  <div id="modal" class="hidden">
+    <div class="card modal-card">
+      <h2 id="modal-title">New session</h2>
+      <form id="modal-form">
+        <label>name <input id="f-name" type="text" placeholder="my-shell" /></label>
+        <label id="f-cmd-row">cmd <input id="f-cmd" type="text" placeholder="sh" /></label>
+        <label>cwd <input id="f-cwd" type="text" placeholder="." /></label>
+        <label>setup script <textarea id="f-setup" rows="3" placeholder="export FOO=1"></textarea></label>
+        <p id="modal-error" class="error hidden"></p>
+        <div class="row">
+          <button type="submit" class="btn primary" id="modal-submit">create</button>
+          <button type="button" class="btn" id="modal-cancel">cancel</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <script src="/vendor/xterm.min.js"></script>
+  <script src="/vendor/addon-fit.js"></script>
+  <script src="/vendor/addon-webgl.js"></script>
+  <script src="/vendor/addon-web-links.js"></script>
+  <script type="module" src="/app.js"></script>
+</body>
+</html>
