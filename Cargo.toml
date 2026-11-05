@@ -1,5 +1,5 @@
 [package]
-name = "webterm"
+name = "dream"
 version = "0.1.0"
 edition = "2021"
 description = "Single-binary web terminal — AI-agent workbench over the browser"

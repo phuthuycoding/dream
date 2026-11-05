@@ -156,7 +156,7 @@ The owner runs AI coding agents in terminals on his Mac mini and wants to work w
 ## Assumptions
 - Likely stack (planning may adjust): Rust + axum/tokio + tokio-tungstenite + portable-pty; xterm.js frontend vendored and embedded via include_bytes; replay log in an asciinema-v2-shaped stream file per session — grounded in reviews/research-terminal-internals.md
 - Per-session state dir holding `session.json` (metadata: name, cwd, setup script, status, log path) + the replay-log stream file — the VibeTunnel control-dir pattern (owner decision: JSON files, no SQLite)
-- Data dir defaults to a platform user-data path (e.g. `~/.local/share/webterm` / `~/Library/Application Support/webterm`)
+- Data dir defaults to a platform user-data path (e.g. `~/.local/share/dream` / `~/Library/Application Support/dream`)
 - Tailscale Serve terminates TLS; the app serves plain HTTP on loopback (reviews/research-remote-exposure.md)
 - Test level defaulted to `full`, UI coverage `critical` — the owner answered the packaging constraint instead of the test question; flagged in the confirmation ask
 

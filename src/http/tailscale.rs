@@ -2,11 +2,11 @@
 //!
 //! `tailscale_guidance` builds the startup hint telling the operator how to
 //! reach the loopback-only server from their tailnet. It never suggests
-//! `tailscale funnel` — webterm must stay tailnet-only, never public.
+//! `tailscale funnel` — dream must stay tailnet-only, never public.
 
 use std::process::{Command, Stdio};
 
-/// Guidance text for exposing webterm on the tailnet.
+/// Guidance text for exposing dream on the tailnet.
 ///
 /// When the `tailscale` binary is on PATH the text is the exact
 /// `tailscale serve --bg <port>` command; otherwise it is an install hint.
@@ -15,9 +15,9 @@ use std::process::{Command, Stdio};
 pub fn tailscale_guidance(port: u16) -> String {
     if tailscale_on_path() {
         format!(
-            "tailscale detected — to reach webterm from your tailnet:\n  \
+            "tailscale detected — to reach dream from your tailnet:\n  \
              tailscale serve --bg {port}\n  \
-             this exposes webterm on your tailnet only"
+             this exposes dream on your tailnet only"
         )
     } else {
         "tailscale not found — install it for tailnet access:\n  \

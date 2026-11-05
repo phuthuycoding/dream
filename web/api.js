@@ -4,8 +4,8 @@
 // every REST call carries `Authorization: Bearer T`; WS uses `?token=T`
 // because the browser WebSocket API cannot set headers.
 
-const TOKEN_KEY = 'webterm.token';
-const ATTENTION_ALL = 'webterm.attention'; // JSON map {id: true}
+const TOKEN_KEY = 'dream.token';
+const ATTENTION_ALL = 'dream.attention'; // JSON map {id: true}
 
 export class AuthError extends Error {
   constructor(message) {
@@ -58,7 +58,7 @@ async function request(path, { method = 'GET', body } = {}) {
     clearToken();
     // Listeners (app.js) drop back to the auth gate no matter which
     // code path — poll, click, attach — surfaced the rejection.
-    window.dispatchEvent(new CustomEvent('webterm:unauthorized'));
+    window.dispatchEvent(new CustomEvent('dream:unauthorized'));
     throw new AuthError('unauthorized — token rejected or missing');
   }
   if (!resp.ok) {

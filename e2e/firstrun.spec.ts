@@ -15,7 +15,7 @@ import {
   getFreePort,
   mkDataDir,
   stopDaemon,
-  WEBTERM_BIN,
+  DREAM_BIN,
 } from './helpers';
 
 interface Spawned {
@@ -27,7 +27,7 @@ interface Spawned {
 }
 
 function spawnWebterm(args: string[], cwd?: string): Spawned {
-  const proc = spawn(WEBTERM_BIN, args, {
+  const proc = spawn(DREAM_BIN, args, {
     stdio: ['ignore', 'pipe', 'pipe'],
     cwd,
   });
@@ -63,14 +63,14 @@ test('first run prints the authed URL + tailscale guidance; restart reuses the t
   const port = await getFreePort();
   const first = spawnWebterm(['--port', String(port), '--data-dir', dataDir]);
   try {
-    // "webterm ready — open this URL once to authenticate:" + URL line.
+    // "dream ready — open this URL once to authenticate:" + URL line.
     const urlMatch = await waitForText(
       first.stdoutText,
       /http:\/\/127\.0\.0\.1:\d+\/\?token=([0-9a-f]+)/,
     );
     const token = urlMatch[1];
     expect(token.length).toBeGreaterThanOrEqual(32);
-    expect(first.stdoutText()).toMatch(/webterm ready — open this URL once/);
+    expect(first.stdoutText()).toMatch(/dream ready — open this URL once/);
 
     // Persisted token matches; the file is owner-only (0600 on unix).
     const tokenFile = path.join(dataDir, 'token');
@@ -92,7 +92,7 @@ test('first run prints the authed URL + tailscale guidance; restart reuses the t
   // Second run on the same data dir: token reused, URL not reprinted.
   const second = spawnWebterm(['--port', String(port), '--data-dir', dataDir]);
   try {
-    await waitForText(second.stdoutText, /webterm ready — token file at/);
+    await waitForText(second.stdoutText, /dream ready — token file at/);
     expect(second.stdoutText()).not.toMatch(/open this URL once/);
   } finally {
     second.kill();
@@ -109,7 +109,7 @@ test('share-link URL boots the SPA — BUG-E2E-001 fixed', async ({ page, daemon
   await page.goto(`${daemon.baseUrl}/?token=${daemon.token}`);
   // app.js adopts the token from the URL into localStorage.
   await expect
-    .poll(() => page.evaluate(() => localStorage.getItem('webterm.token')))
+    .poll(() => page.evaluate(() => localStorage.getItem('dream.token')))
     .toBe(daemon.token);
   await expect(page.locator('#view-dashboard')).toBeVisible();
 });
@@ -147,8 +147,8 @@ test('--public prints a loud warning; non-loopback without it refuses to bind', 
       '--public',
     ]);
     try {
-      await waitForText(loud.stderrText, /WARNING: binding 0\.0\.0\.0 exposes webterm/);
-      await waitForText(loud.stdoutText, /webterm ready/);
+      await waitForText(loud.stderrText, /WARNING: binding 0\.0\.0\.0 exposes dream/);
+      await waitForText(loud.stdoutText, /dream ready/);
     } finally {
       loud.kill();
       await loud.exited.catch(() => {});
@@ -166,7 +166,7 @@ test('self-contained binary: serves the UI from a bare cwd; links only system li
     const resp = await fetch(`${daemon.baseUrl}/?token=${daemon.token}`);
     expect(resp.status).toBe(200);
     const html = await resp.text();
-    expect(html).toContain('<title>webterm</title>');
+    expect(html).toContain('<title>dream</title>');
     expect(html).toContain('/app.js');
   } finally {
     await stopDaemon(daemon);
@@ -176,7 +176,7 @@ test('self-contained binary: serves the UI from a bare cwd; links only system li
   // Packaging sanity (macOS): only system libraries, nothing from the
   // build tree or a bundled dylib.
   if (process.platform === 'darwin') {
-    const out = execFileSync('otool', ['-L', WEBTERM_BIN], { encoding: 'utf8' });
+    const out = execFileSync('otool', ['-L', DREAM_BIN], { encoding: 'utf8' });
     const libs = out
       .split('\n')
       .slice(1)

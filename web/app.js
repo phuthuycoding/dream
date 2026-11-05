@@ -118,7 +118,7 @@ function boot() {
     showGate();
   });
   window.addEventListener('hashchange', () => void route());
-  window.addEventListener('webterm:unauthorized', () => {
+  window.addEventListener('dream:unauthorized', () => {
     authed = false;
     showGate('session expired — paste the token again');
   });

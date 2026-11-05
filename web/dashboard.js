@@ -118,7 +118,7 @@ async function run(action) {
     await action();
     await refresh();
   } catch (err) {
-    // 401 already raised webterm:unauthorized — the gate handles the UX.
+    // 401 already raised dream:unauthorized — the gate handles the UX.
     if (err instanceof AuthError) return;
     window.alert(err instanceof Error ? err.message : String(err));
   }

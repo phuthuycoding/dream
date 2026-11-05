@@ -1,4 +1,4 @@
-# webterm
+# dream
 
 Single-binary web terminal: real PTY sessions served over HTTP + WebSocket,
 built as a workbench for AI-agent CLIs. Sessions keep running when the
@@ -9,8 +9,8 @@ restart.
 
 ```sh
 cargo build --release
-# binary lands at target/release/webterm — copy it anywhere on PATH, e.g.
-cp target/release/webterm ~/.local/bin/
+# binary lands at target/release/dream — copy it anywhere on PATH, e.g.
+cp target/release/dream ~/.local/bin/
 ```
 
 No runtime dependencies; the dashboard frontend is embedded in the binary.
@@ -18,22 +18,22 @@ No runtime dependencies; the dashboard frontend is embedded in the binary.
 ## Run
 
 ```sh
-webterm                # listens on http://127.0.0.1:4020
-webterm --port 8080
+dream                # listens on http://127.0.0.1:4020
+dream --port 8080
 ```
 
-webterm binds loopback only by default. Binding anything else requires
+dream binds loopback only by default. Binding anything else requires
 `--public`, which prints a security warning — anyone who can reach the
 address *and* holds the token gets a shell on your machine.
 
 ## Auth flow
 
-- On **first run** webterm generates a random 64-char token, stores it at
+- On **first run** dream generates a random 64-char token, stores it at
   `<data-dir>/token` (mode `0600`), and prints the authenticated URL exactly
   once:
 
   ```
-  webterm ready — open this URL once to authenticate:
+  dream ready — open this URL once to authenticate:
     http://127.0.0.1:4020/?token=<token>
   ```
 
@@ -51,8 +51,8 @@ address *and* holds the token gets a shell on your machine.
 
 Default `<data-dir>` is the platform data dir (`--data-dir` overrides):
 
-- macOS: `~/Library/Application Support/webterm`
-- Linux: `~/.local/share/webterm`
+- macOS: `~/Library/Application Support/dream`
+- Linux: `~/.local/share/dream`
 
 ```
 <data-dir>/
@@ -86,7 +86,7 @@ from the built-in dashboard.
 
 ## Remote access via Tailscale
 
-webterm is loopback-only by default; reach it from other devices over your
+dream is loopback-only by default; reach it from other devices over your
 tailnet without exposing it publicly:
 
 ```sh
@@ -94,7 +94,7 @@ tailscale serve --bg 4020
 ```
 
 `tailscale serve` terminates TLS on the tailnet and proxies to
-`http://127.0.0.1:4020` — webterm is then reachable at
+`http://127.0.0.1:4020` — dream is then reachable at
 `https://<machine>.<tailnet>.ts.net/?token=<token>` from tailnet devices
 only. `tailscale` must be installed (`brew install tailscale` on macOS, or
 see https://tailscale.com/download) and logged in, and the tailnet's HTTPS
@@ -103,7 +103,7 @@ Certificates).
 
 ## Auto-start on macOS (launchd)
 
-Save as `~/Library/LaunchAgents/dev.webterm.plist`, adjusting the binary
+Save as `~/Library/LaunchAgents/dev.dream.plist`, adjusting the binary
 and log paths (launchd does not expand `~` — use absolute paths):
 
 ```xml
@@ -113,10 +113,10 @@ and log paths (launchd does not expand `~` — use absolute paths):
 <plist version="1.0">
 <dict>
   <key>Label</key>
-  <string>dev.webterm</string>
+  <string>dev.dream</string>
   <key>ProgramArguments</key>
   <array>
-    <string>/usr/local/bin/webterm</string>
+    <string>/usr/local/bin/dream</string>
     <string>--port</string>
     <string>4020</string>
   </array>
@@ -125,19 +125,19 @@ and log paths (launchd does not expand `~` — use absolute paths):
   <key>KeepAlive</key>
   <true/>
   <key>StandardOutPath</key>
-  <string>/Users/<you>/Library/Logs/webterm.out.log</string>
+  <string>/Users/<you>/Library/Logs/dream.out.log</string>
   <key>StandardErrorPath</key>
-  <string>/Users/<you>/Library/Logs/webterm.err.log</string>
+  <string>/Users/<you>/Library/Logs/dream.err.log</string>
 </dict>
 </plist>
 ```
 
 ```sh
-launchctl load ~/Library/LaunchAgents/dev.webterm.plist
-launchctl start dev.webterm
+launchctl load ~/Library/LaunchAgents/dev.dream.plist
+launchctl start dev.dream
 ```
 
-webterm prints the token URL once on first run to stdout, so keep these
+dream prints the token URL once on first run to stdout, so keep these
 logs owner-private — `~/Library/Logs` is, a world-readable `/tmp` file is
 not.
 
@@ -157,11 +157,11 @@ not.
 
 ```sh
 cargo build --release
-(cd target/release && shasum -a 256 webterm) > webterm-<version>-<os>-<arch>.sha256
+(cd target/release && shasum -a 256 dream) > dream-<version>-<os>-<arch>.sha256
 ```
 
 Publish the binary and the `.sha256` side-by-side; consumers verify with
-`shasum -a 256 -c webterm-<version>-<os>-<arch>.sha256` run in the
-directory containing the `webterm` binary. The release profile
+`shasum -a 256 -c dream-<version>-<os>-<arch>.sha256` run in the
+directory containing the `dream` binary. The release profile
 strips symbols, enables LTO and `codegen-units = 1`, and optimizes for size
 (`opt-level = "z"`).
