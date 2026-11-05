@@ -23,7 +23,17 @@ async fn main() -> anyhow::Result<()> {
     let cfg = Config::load(&cli)?;
     let addr = cfg.listen_addr();
 
-    let auth = AuthToken::load_or_generate(&cfg.data_dir)?;
+    let auth = match &cfg.auth_token {
+        Some(token) => AuthToken {
+            token: token.clone(),
+            first_run: false,
+        },
+        None => AuthToken::load_or_generate(&cfg.data_dir)?,
+    };
+
+    if cfg.bind.is_loopback() {
+        println!("{}", webterm::http::tailscale::tailscale_guidance(cfg.port));
+    }
 
     // Resurrect sessions that were live when the daemon last stopped, and
     // start the retention enforcer when a policy is configured.
