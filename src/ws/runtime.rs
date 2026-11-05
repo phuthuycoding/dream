@@ -15,6 +15,7 @@
 
 use std::collections::HashMap;
 use std::io;
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 use std::time::Duration;
@@ -26,6 +27,7 @@ use tracing::warn;
 
 use crate::model::Session;
 use crate::pty::PtyHandle;
+use crate::replay::enforcer;
 use crate::replay::log::{Event, ReplayLog};
 use crate::replay::reader;
 use crate::vt::emulator::VtEmu;
@@ -38,8 +40,13 @@ const DEFAULT_ROWS: u16 = 24;
 /// skipped ahead rather than stalling the session's other consumers.
 const BROADCAST_CAPACITY: usize = 256;
 
-/// How much of the retained replay log an attach replays as scrollback.
-const SCROLLBACK_TAIL_BYTES: u64 = 256 * 1024;
+/// How much of the retained replay log an attach replays as scrollback —
+/// also the dead-attach replay budget.
+pub(crate) const SCROLLBACK_TAIL_BYTES: u64 = 256 * 1024;
+
+/// Replay-log size cap applied on append when `--log-cap` is not given,
+/// so a live log stays bounded without waiting for the periodic enforcer.
+pub const DEFAULT_LOG_CAP: u64 = 8 * 1024 * 1024;
 
 /// Bound on draining pty output after the child exits. A detached
 /// descendant can inherit the pty slave fd and keep the reader thread —
@@ -127,6 +134,13 @@ impl SessionRuntime {
         lock(&self.vt).snapshot()
     }
 
+    /// Reset the replay log to a fresh header under this runtime's log
+    /// mutex — the same lock the pump appends under, so a clean can never
+    /// tear an in-flight append the way a path-based rewrite would.
+    pub fn clean(&self) -> io::Result<()> {
+        lock(&self.log).truncate_fresh()
+    }
+
     /// Terminate the child shell; the pump still drains output and
     /// broadcasts the end event. Lifecycle-layer use: kill, and retiring
     /// a runtime replaced by respawn/resurrect.
@@ -186,26 +200,29 @@ fn runtimes() -> &'static AsyncMutex<HashMap<String, Arc<SessionRuntime>>> {
 pub async fn attach_runtime(
     session: &Session,
 ) -> anyhow::Result<Option<(Arc<SessionRuntime>, Vec<Vec<u8>>)>> {
-    let mut guard = runtimes().lock().await;
-    if let Some(rt) = guard.get(&session.id) {
-        if rt.is_alive() {
-            // `tail` is blocking file io; holding the global map lock
-            // across it must not stall an executor worker.
-            let rt2 = rt.clone();
-            let scrollback = tokio::task::spawn_blocking(move || {
-                rt2.scrollback(SCROLLBACK_TAIL_BYTES)
-            })
-            .await
-            .context("scrollback task failed to join")?
-            .context("read retained log tail")?;
-            return Ok(Some((rt.clone(), scrollback)));
+    let rt = {
+        let mut guard = runtimes().lock().await;
+        match guard.get(&session.id) {
+            Some(rt) if rt.is_alive() => rt.clone(),
+            // Registry may still say Live while the shell is gone: the
+            // stale runtime is dropped; its replacement is the lifecycle
+            // layer's call, not this attach's.
+            Some(_) => {
+                guard.remove(&session.id);
+                return Ok(None);
+            }
+            None => return Ok(None),
         }
-        // Registry may still say Live while the shell is gone: the stale
-        // runtime is dropped; its replacement is the lifecycle layer's
-        // call, not this attach's.
-        guard.remove(&session.id);
-    }
-    Ok(None)
+    };
+    // `tail` is blocking file io — it must run neither on an executor
+    // worker nor under the global map lock, where a slow read would stall
+    // every other session's spawn, attach and monitor.
+    let rt2 = rt.clone();
+    let scrollback = tokio::task::spawn_blocking(move || rt2.scrollback(SCROLLBACK_TAIL_BYTES))
+        .await
+        .context("scrollback task failed to join")?
+        .context("read retained log tail")?;
+    Ok(Some((rt, scrollback)))
 }
 
 /// Spawn a fresh shell for `session` and swap it into the shared map,
@@ -213,9 +230,22 @@ pub async fn attach_runtime(
 /// resurrect must never leave two shells on one session. The only path
 /// that inserts into the shared map; every caller in the lifecycle layer
 /// registers the returned runtime so it is monitored.
-pub(crate) async fn spawn_fresh(session: &Session) -> anyhow::Result<Arc<SessionRuntime>> {
-    let mut guard = runtimes().lock().await;
-    if let Some(old) = guard.remove(&session.id) {
+///
+/// The global map lock is only held for the cheap map operations: the
+/// whole-file scrollback read, the pty fork and the log create run
+/// outside it so one slow spawn cannot stall every other session's
+/// attach and monitor. The TOCTOU serialization is preserved — the swap
+/// still lands under the same lock `retire_dead` checks, and a runtime
+/// another spawn slipped into the map during our work wins (ours is
+/// retired before it ever ran a monitor).
+pub(crate) async fn spawn_fresh(
+    session: &Session,
+    log_cap: u64,
+) -> anyhow::Result<Arc<SessionRuntime>> {
+    // Evict the replaced runtime first so its shell is killed before the
+    // fresh log truncates the file its pump may still append to.
+    let old = runtimes().lock().await.remove(&session.id);
+    if let Some(old) = old {
         if let Err(err) = old.kill() {
             warn!(session_pty = %old.pty_id(), error = %err, "kill of replaced runtime failed");
         }
@@ -229,7 +259,19 @@ pub(crate) async fn spawn_fresh(session: &Session) -> anyhow::Result<Arc<Session
         tokio::task::spawn_blocking(move || pre_spawn_scrollback(&scrollback_session))
             .await
             .context("pre-spawn scrollback task failed to join")?;
-    let rt = spawn(session, retained).await?;
+    let rt = spawn(session, retained, log_cap).await?;
+    let mut guard = runtimes().lock().await;
+    if let Some(newer) = guard.get(&session.id) {
+        // A concurrent spawn for this session won the swap while our
+        // shell was being set up; retire ours and hand back theirs so
+        // every caller lands on the same live shell.
+        let newer = newer.clone();
+        drop(guard);
+        if let Err(err) = rt.kill() {
+            warn!(session_pty = %rt.pty_id(), error = %err, "kill of superseded spawn failed");
+        }
+        return Ok(newer);
+    }
     guard.insert(session.id.clone(), rt.clone());
     Ok(rt)
 }
@@ -250,12 +292,49 @@ pub(crate) async fn detach_runtime(session_id: &str) -> Option<Arc<SessionRuntim
     runtimes().lock().await.remove(session_id)
 }
 
+/// The session's runtime while the shared map still holds one — alive or
+/// still draining after exit — so writers serialize against the pump
+/// through its log mutex instead of rewriting the file by path.
+pub(crate) async fn runtime_entry(session_id: &str) -> Option<Arc<SessionRuntime>> {
+    runtimes().lock().await.get(session_id).cloned()
+}
+
+/// The session's replay log path, but only when it resolves inside the
+/// session's own dir — `<…>/<session-id>/replay.cast` after
+/// canonicalization. A `session.json` pointing the log elsewhere (via
+/// `..` or an absolute path) is refused with a warn rather than followed
+/// to an arbitrary file; a missing log is `None` silently — nothing to
+/// read either way.
+pub(crate) fn validated_log_path(session: &Session) -> Option<PathBuf> {
+    let canonical = session.log_path.canonicalize().ok()?;
+    let is_own_log = canonical
+        .file_name()
+        .is_some_and(|name| name == std::ffi::OsStr::new(enforcer::LOG_FILE_NAME))
+        && canonical
+            .parent()
+            .and_then(|parent| parent.file_name())
+            .is_some_and(|name| name == std::ffi::OsStr::new(&session.id));
+    if is_own_log {
+        Some(canonical)
+    } else {
+        warn!(
+            session = %session.id,
+            log_path = %session.log_path.display(),
+            "log_path escapes the session dir; refusing to read it"
+        );
+        None
+    }
+}
+
 /// Output payloads of the newest whole events in the session's log within
 /// the scrollback budget — read just before `spawn` truncates the file,
 /// so an attach following the respawn still replays the prior shell's
 /// retained tail. A missing or unreadable log means none.
 fn pre_spawn_scrollback(session: &Session) -> Vec<Vec<u8>> {
-    let events = match reader::read_events(&session.log_path) {
+    let Some(log_path) = validated_log_path(session) else {
+        return Vec::new();
+    };
+    let events = match reader::read_events(&log_path) {
         Ok(events) => events,
         Err(_) => return Vec::new(),
     };
@@ -264,7 +343,7 @@ fn pre_spawn_scrollback(session: &Session) -> Vec<Vec<u8>> {
 
 /// Newest whole payloads within `n_bytes` — always at least the newest,
 /// the same suffix-window semantics `ReplayLog::tail` applies to events.
-fn tail_within(payloads: Vec<Vec<u8>>, n_bytes: u64) -> Vec<Vec<u8>> {
+pub(crate) fn tail_within(payloads: Vec<Vec<u8>>, n_bytes: u64) -> Vec<Vec<u8>> {
     let mut used = 0u64;
     let mut from = payloads.len();
     for (i, bytes) in payloads.iter().enumerate().rev() {
@@ -281,14 +360,27 @@ fn tail_within(payloads: Vec<Vec<u8>>, n_bytes: u64) -> Vec<Vec<u8>> {
 /// pump task that drives emulator/log/broadcast. `retained_scrollback`
 /// is the log tail captured before the fresh `ReplayLog::create`
 /// truncated it; the runtime replays it as scrollback prefix.
+///
+/// `session.cmd` is a shell command line, not an argv: it runs through
+/// `sh -c` so quoting, pipes and compound commands behave the way the
+/// same line typed into a terminal would.
 async fn spawn(
     session: &Session,
     retained_scrollback: Vec<Vec<u8>>,
+    log_cap: u64,
 ) -> anyhow::Result<Arc<SessionRuntime>> {
-    let mut words = session.cmd.split_whitespace();
-    let program = words.next().context("session cmd is empty")?;
-    let mut cmd = CommandBuilder::new(program);
-    cmd.args(words);
+    anyhow::ensure!(
+        !session.cmd.trim().is_empty(),
+        "session cmd is empty"
+    );
+    let mut cmd = CommandBuilder::new("sh");
+    cmd.arg("-c");
+    cmd.arg(session.cmd.as_str());
+    // The header advertises xterm-256color; without these a pty child
+    // launched under a minimal environment (launchd, systemd) has no
+    // TERM at all and full-screen apps degrade or refuse to run.
+    cmd.env("TERM", "xterm-256color");
+    cmd.env("COLORTERM", "truecolor");
 
     let mut pty = PtyHandle::spawn_async(session.cwd.clone(), session.setup_script.clone(), cmd)
         .await
@@ -296,15 +388,17 @@ async fn spawn(
     let read_rx = pty.read();
     let exit_rx = pty.wait_exit();
 
-    // Blocking file create; callers hold the global runtime-map lock, so
-    // it must not run on an executor worker.
+    // Blocking file create — off the executor worker, same as the other
+    // replay-log reads in this module.
     let log_path = session.log_path.clone();
-    let log = tokio::task::spawn_blocking(move || {
+    let mut log = tokio::task::spawn_blocking(move || {
         ReplayLog::create(&log_path, DEFAULT_COLS, DEFAULT_ROWS)
     })
     .await
     .context("replay log create task failed to join")?
     .with_context(|| format!("create replay log {}", session.log_path.display()))?;
+    // On-append trim keeps the live log bounded between enforcer ticks.
+    log.set_cap(log_cap);
     let (tx, _) = broadcast::channel(BROADCAST_CAPACITY);
     let rt = Arc::new(SessionRuntime {
         session_id: session.id.clone(),
@@ -356,7 +450,17 @@ async fn pump(
                     }
                 }
                 // Sender dropped with the handle — nothing left to pump.
-                Err(_) => return,
+                // Still finalize: a runtime left `alive` wedges attaches
+                // (no end frame ever comes) and keeps its monitor polling
+                // a dead shell forever.
+                Err(_) => {
+                    let status = exit_rx
+                        .borrow()
+                        .clone()
+                        .unwrap_or_else(|| ExitStatus::with_exit_code(1));
+                    finalize_exit(&rt, status);
+                    return;
+                }
             },
         }
     }

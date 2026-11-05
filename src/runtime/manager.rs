@@ -15,7 +15,7 @@
 //! so a monitor retired by respawn/resurrect/kill cannot stamp `Dead`
 //! over a newer shell's record.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
@@ -67,6 +67,8 @@ struct Attention {
 pub struct RuntimeManager {
     data_dir: PathBuf,
     idle_attention_after: Duration,
+    /// On-append replay-log cap wired into every spawned `ReplayLog`.
+    log_cap: u64,
     entries: Arc<Mutex<HashMap<String, Arc<SessionEntry>>>>,
 }
 
@@ -77,13 +79,22 @@ impl RuntimeManager {
         Self {
             data_dir,
             idle_attention_after,
+            log_cap: ws_runtime::DEFAULT_LOG_CAP,
             entries: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
+    /// Set the on-append replay-log cap; `None` falls back to
+    /// [`ws_runtime::DEFAULT_LOG_CAP`]. Builder-style so the daemon wires
+    /// `--log-cap` in at construction.
+    pub fn with_log_cap(mut self, log_cap: Option<u64>) -> Self {
+        self.log_cap = log_cap.unwrap_or(ws_runtime::DEFAULT_LOG_CAP);
+        self
+    }
+
     /// Create-route call: a fresh shell for a freshly created session.
     pub async fn spawn(&self, session: &Session) -> anyhow::Result<Arc<SessionRuntime>> {
-        let rt = ws_runtime::spawn_fresh(session).await?;
+        let rt = ws_runtime::spawn_fresh(session, self.log_cap).await?;
         self.register(&session.id, rt.clone());
         Ok(rt)
     }
@@ -103,7 +114,7 @@ impl RuntimeManager {
             // No live runtime in the shared map — a stale shell died or
             // the create-time spawn failed. The fresh spawn registers its
             // monitor below like every other manager spawn.
-            None => ws_runtime::spawn_fresh(session).await?,
+            None => ws_runtime::spawn_fresh(session, self.log_cap).await?,
         };
         let entry = self.register(&session.id, rt.clone());
         let mut attention = lock(&entry.attention);
@@ -116,7 +127,7 @@ impl RuntimeManager {
     /// persisted `Live` mark — spawning first so a failed spawn leaves the
     /// record `Dead` rather than claiming life for a shell that never ran.
     pub async fn respawn(&self, session: &Session) -> anyhow::Result<Arc<SessionRuntime>> {
-        let rt = ws_runtime::spawn_fresh(session).await?;
+        let rt = ws_runtime::spawn_fresh(session, self.log_cap).await?;
         self.register(&session.id, rt.clone());
         let mut registry =
             Registry::load(&self.data_dir).context("load registry for respawn")?;
@@ -175,7 +186,7 @@ impl RuntimeManager {
     }
 
     async fn resurrect_one(&self, session: &Session) -> anyhow::Result<()> {
-        let rt = ws_runtime::spawn_fresh(session).await?;
+        let rt = ws_runtime::spawn_fresh(session, self.log_cap).await?;
         self.register(&session.id, rt);
         let mut registry =
             Registry::load(&self.data_dir).context("load registry for resurrected mark")?;
@@ -200,23 +211,59 @@ impl RuntimeManager {
             .is_some_and(|entry| lock(&entry.attention).flagged)
     }
 
+    /// Clean-route call: reset the session's replay log to a fresh header.
+    /// While the shared map still holds a runtime — alive or draining —
+    /// the truncate runs under its log mutex so it serializes against the
+    /// pump's appends; a path-based rewrite there would tear the file.
+    /// With no runtime on record the enforcer's path reset is safe.
+    pub async fn clean_log(&self, session: &Session) -> anyhow::Result<()> {
+        if let Some(rt) = ws_runtime::runtime_entry(&session.id).await {
+            return tokio::task::spawn_blocking(move || rt.clean())
+                .await
+                .context("clean task failed to join")?
+                .context("reset live replay log");
+        }
+        // The validated path keeps a tampered `log_path` from steering
+        // the reset to a dir outside the session's own.
+        if let Some(log_path) = ws_runtime::validated_log_path(session) {
+            if let Some(dir) = log_path.parent() {
+                enforcer::clean_all(dir).context("reset replay log")?;
+            }
+        }
+        Ok(())
+    }
+
     /// Periodic retention pass over `<data_dir>/sessions/` using
-    /// `enforcer::enforce`. The caller owns policy and cadence — the
-    /// daemon wires `Config::log_cap`/`log_max_age` in.
+    /// `enforcer::enforce_excluding`. The caller owns policy and cadence —
+    /// the daemon wires `Config::log_cap`/`log_max_age` in. Logs with a
+    /// live runtime are skipped each tick: path writes would race their
+    /// pump's appends, and they self-trim on append under `log_cap`.
     pub fn spawn_enforcer(
         &self,
         policy: RetentionPolicy,
         period: Duration,
     ) -> tokio::task::JoinHandle<()> {
         let sessions = self.data_dir.join("sessions");
+        let entries = self.entries.clone();
+        let sessions_root = sessions.clone();
         tokio::spawn(async move {
             let mut interval = tokio::time::interval(period);
             interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
             loop {
                 interval.tick().await;
+                // Rebuilt every tick: which session dirs have a live log
+                // writer right now.
+                let skip: HashSet<PathBuf> = {
+                    let root = sessions_root.clone();
+                    lock(&entries).keys().map(|id| root.join(id)).collect()
+                };
                 let dir = sessions.clone();
                 let policy = policy.clone();
-                match tokio::task::spawn_blocking(move || enforcer::enforce(&dir, &policy)).await {
+                match tokio::task::spawn_blocking(move || {
+                    enforcer::enforce_excluding(&dir, &policy, &skip)
+                })
+                .await
+                {
                     Ok(Ok(())) => {}
                     Ok(Err(err)) => warn!(error = %err, "replay retention pass had failures"),
                     Err(err) => warn!(error = %err, "retention task failed to join"),

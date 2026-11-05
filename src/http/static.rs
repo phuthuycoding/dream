@@ -23,6 +23,15 @@ pub async fn serve(uri: Uri) -> Response {
             Response::builder()
                 .status(StatusCode::OK)
                 .header(header::CONTENT_TYPE, mime.as_ref())
+                // The shell is a single-origin app: deny framing and pin
+                // resources to self (+ ws/wss for the attach socket).
+                // style-src keeps 'unsafe-inline' — xterm injects inline
+                // styles at runtime.
+                .header(header::X_FRAME_OPTIONS, "DENY")
+                .header(
+                    header::CONTENT_SECURITY_POLICY,
+                    "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self' ws: wss:; img-src 'self' data:",
+                )
                 .body(Body::from(file.data.into_owned()))
                 .expect("static response is always constructible")
         }

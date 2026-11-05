@@ -1,3 +1,4 @@
+use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Context;
@@ -5,7 +6,7 @@ use webterm::{
     auth::AuthToken,
     cli::Cli,
     config::Config,
-    http::routes::build_router,
+    http::routes::build_router_with,
     replay::enforcer::RetentionPolicy,
     runtime::{RuntimeManager, DEFAULT_IDLE_ATTENTION},
 };
@@ -36,8 +37,13 @@ async fn main() -> anyhow::Result<()> {
     }
 
     // Resurrect sessions that were live when the daemon last stopped, and
-    // start the retention enforcer when a policy is configured.
-    let manager = RuntimeManager::new(cfg.data_dir.clone(), DEFAULT_IDLE_ATTENTION);
+    // start the retention enforcer when a policy is configured. The router
+    // shares this same manager — a second one would duplicate monitors
+    // and diverge attention state.
+    let manager = Arc::new(
+        RuntimeManager::new(cfg.data_dir.clone(), DEFAULT_IDLE_ATTENTION)
+            .with_log_cap(cfg.log_cap),
+    );
     match manager.resurrect_all().await {
         Ok(0) => {}
         Ok(n) => tracing::info!("resurrected {n} session(s)"),
@@ -58,7 +64,7 @@ async fn main() -> anyhow::Result<()> {
         println!("webterm ready — token file at {}", cfg.data_dir.display());
     }
 
-    let app = build_router(cfg.data_dir.clone(), auth.token);
+    let app = build_router_with(manager, cfg.data_dir.clone(), auth.token);
     let listener = tokio::net::TcpListener::bind(&addr)
         .await
         .with_context(|| format!("cannot bind {addr} — port already in use?"))?;

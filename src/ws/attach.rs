@@ -13,6 +13,7 @@
 //! frame names the ended state and offers the respawn route.
 
 use axum::extract::ws::{Message, WebSocket};
+use anyhow::Context;
 use tokio::sync::broadcast;
 use tracing::{debug, warn};
 
@@ -58,6 +59,19 @@ async fn live_attach(socket: &mut WebSocket, session: &Session) -> anyhow::Resul
     let (mut rx, snapshot) = rt.attach_view();
     send(socket, Frame::Snapshot(snapshot)).await?;
 
+    // The shell may have exited between `attach_runtime`'s liveness check
+    // and the subscribe inside `attach_view` — that `Ended` broadcast went
+    // out before `rx` existed, so without this check the client would wait
+    // on a live stream that can never deliver an end frame.
+    if !rt.is_alive() {
+        let notice = format!(
+            "session ended; respawn: POST /api/sessions/{}/respawn",
+            session.id
+        );
+        let _ = send(socket, Frame::End(notice.into_bytes())).await;
+        return Ok(());
+    }
+
     loop {
         tokio::select! {
             msg = socket.recv() => match msg {
@@ -99,19 +113,16 @@ async fn live_attach(socket: &mut WebSocket, session: &Session) -> anyhow::Resul
     }
 }
 
-/// Dead path: replay the retained log, then end with a notice that names
-/// the ended state and offers the respawn route.
+/// Dead path: replay the retained log tail, then end with a notice that
+/// names the ended state and offers the respawn route.
 async fn dead_attach(socket: &mut WebSocket, session: &Session) -> anyhow::Result<()> {
     let mut exit_code: Option<i32> = None;
-    match reader::read_events(&session.log_path) {
-        Ok(events) => {
-            for event in events {
-                match event {
-                    Event::Output(bytes) => send(socket, Frame::Output(bytes)).await?,
-                    Event::Exit(code) => exit_code = Some(code),
-                    Event::Resize { .. } | Event::Marker(_) => {}
-                }
+    match read_dead_log(session).await {
+        Ok((outputs, exit)) => {
+            for bytes in outputs {
+                send(socket, Frame::Output(bytes)).await?;
             }
+            exit_code = exit;
         }
         // A dead session without a readable log still gets its end frame.
         Err(err) => {
@@ -132,6 +143,34 @@ async fn dead_attach(socket: &mut WebSocket, session: &Session) -> anyhow::Resul
         ),
     };
     send(socket, Frame::End(notice.into_bytes())).await
+}
+
+/// Read the session's log off the executor (a dead log can be large and
+/// the read is blocking io) and return the output payloads of its newest
+/// whole events within the same scrollback budget live attaches get —
+/// plus the recorded exit code wherever it sits in the file.
+async fn read_dead_log(session: &Session) -> anyhow::Result<(Vec<Vec<u8>>, Option<i32>)> {
+    // `None` covers both a missing log and a path outside the session
+    // dir — the latter already logged its own specific warn.
+    let Some(log_path) = runtime::validated_log_path(session) else {
+        anyhow::bail!("no replay log inside the session dir");
+    };
+    let events = tokio::task::spawn_blocking(move || reader::read_events(&log_path))
+        .await
+        .context("dead-log read task failed to join")??;
+    let mut outputs = Vec::new();
+    let mut exit_code = None;
+    for event in events {
+        match event {
+            Event::Output(bytes) => outputs.push(bytes),
+            Event::Exit(code) => exit_code = Some(code),
+            Event::Resize { .. } | Event::Marker(_) => {}
+        }
+    }
+    Ok((
+        runtime::tail_within(outputs, runtime::SCROLLBACK_TAIL_BYTES),
+        exit_code,
+    ))
 }
 
 /// One inbound client frame: input to the pty, resize to pty + emulator +

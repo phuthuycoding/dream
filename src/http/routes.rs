@@ -22,7 +22,6 @@ use axum::{
 use serde::Deserialize;
 
 use crate::model::{Session, Status};
-use crate::replay::enforcer;
 use crate::runtime::{RuntimeManager, DEFAULT_IDLE_ATTENTION};
 use crate::state::registry::Registry;
 
@@ -37,9 +36,23 @@ pub struct AppState {
     pub runtime: Arc<RuntimeManager>,
 }
 
+/// Standalone entry point (tests): builds its own manager. The daemon
+/// uses [`build_router_with`] so the router shares main's one
+/// `RuntimeManager` — the manager that ran `resurrect_all` and the
+/// enforcer must be the one the routes spawn/attach through, or two
+/// monitor sets would track the same sessions.
 pub fn build_router(data_dir: PathBuf, token: String) -> Router {
+    let runtime = Arc::new(RuntimeManager::new(data_dir.clone(), DEFAULT_IDLE_ATTENTION));
+    build_router_with(runtime, data_dir, token)
+}
+
+pub fn build_router_with(
+    runtime: Arc<RuntimeManager>,
+    data_dir: PathBuf,
+    token: String,
+) -> Router {
     let state = AppState {
-        runtime: Arc::new(RuntimeManager::new(data_dir.clone(), DEFAULT_IDLE_ATTENTION)),
+        runtime,
         data_dir,
         token,
     };
@@ -116,7 +129,11 @@ async fn create_session(
             )
         })?
     };
-    let cmd = body.cmd.unwrap_or_else(|| "sh".to_string());
+    // `cmd` is a shell command line run via `sh -c` on spawn; the default
+    // is the user's login shell.
+    let cmd = body
+        .cmd
+        .unwrap_or_else(|| std::env::var("SHELL").unwrap_or_else(|_| "sh".to_string()));
     let name = body.name.unwrap_or_else(|| cmd.clone());
     let cwd = body.cwd.unwrap_or_else(|| PathBuf::from("."));
     let session = registry(&state)?
@@ -180,27 +197,40 @@ async fn delete_session(
     Ok(StatusCode::NO_CONTENT)
 }
 
-/// Reset this session's replay log to a fresh header.
+/// Reset this session's replay log to a fresh header. The manager routes
+/// the reset through the live runtime's log mutex when one exists — a
+/// path-based rewrite would race the pump's appends.
 async fn clean_session(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> ApiResult<StatusCode> {
-    session_or_404(&registry(&state)?, &id)?;
-    let dir = state.data_dir.join("sessions").join(&id);
-    if dir.is_dir() {
-        enforcer::clean_all(&dir).map_err(|err| internal(err.into()))?;
-    }
+    let session = session_or_404(&registry(&state)?, &id)?;
+    state.runtime.clean_log(&session).await.map_err(internal)?;
     Ok(StatusCode::NO_CONTENT)
 }
 
-/// Reset every session's replay log; a missing sessions dir means there is
-/// nothing to clean, which is success rather than an error.
+/// Reset every session's replay log. Live runtimes are cleaned through
+/// their own log mutex (same reason as `clean_session`); sessions with
+/// no runtime get the enforcer's path reset. Per-session failures are
+/// aggregated rather than aborting the pass.
 async fn clean_all_logs(State(state): State<AppState>) -> ApiResult<StatusCode> {
-    let sessions = state.data_dir.join("sessions");
-    if sessions.is_dir() {
-        enforcer::clean_all(&sessions).map_err(|err| internal(err.into()))?;
+    let sessions = registry(&state)?.list().to_vec();
+    let mut failures = Vec::new();
+    for session in &sessions {
+        if let Err(err) = state.runtime.clean_log(session).await {
+            tracing::warn!(session = %session.id, error = %err, "clean failed");
+            failures.push(format!("{}: {err:#}", session.id));
+        }
     }
-    Ok(StatusCode::NO_CONTENT)
+    if failures.is_empty() {
+        Ok(StatusCode::NO_CONTENT)
+    } else {
+        Err(internal(anyhow::anyhow!(
+            "{} log(s) failed to clean: {}",
+            failures.len(),
+            failures.join("; ")
+        )))
+    }
 }
 
 /// WS attach point. Live PTY streaming is TASK-007; the upgrade is accepted
