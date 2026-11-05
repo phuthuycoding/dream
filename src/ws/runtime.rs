@@ -16,6 +16,7 @@ use std::collections::HashMap;
 use std::io;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
+use std::time::Duration;
 
 use anyhow::Context;
 use portable_pty::{CommandBuilder, ExitStatus};
@@ -38,6 +39,12 @@ const BROADCAST_CAPACITY: usize = 256;
 
 /// How much of the retained replay log an attach replays as scrollback.
 const SCROLLBACK_TAIL_BYTES: u64 = 256 * 1024;
+
+/// Bound on draining pty output after the child exits. A detached
+/// descendant can inherit the pty slave fd and keep the reader thread —
+/// and `read_rx` — alive past exit, so an unbounded drain would stall
+/// `finalize_exit` forever.
+const EXIT_DRAIN_TIMEOUT: Duration = Duration::from_millis(400);
 
 /// One live-stream event delivered to every attached client.
 #[derive(Debug, Clone)]
@@ -261,11 +268,17 @@ async fn pump(
                     let status = exit_rx.borrow().clone();
                     if let Some(status) = status {
                         // The exit watch can win the select while read_rx
-                        // still buffers output; drain until the reader
-                        // closes so the final bytes reach clients and log.
-                        while let Some(bytes) = read_rx.recv().await {
-                            pump_chunk(&rt, bytes);
-                        }
+                        // still buffers output; drain so the final bytes
+                        // reach clients and log. The drain is bounded —
+                        // a descendant still holding the slave open keeps
+                        // read_rx alive past exit, and finalize must not
+                        // wait on it.
+                        let _ = tokio::time::timeout(EXIT_DRAIN_TIMEOUT, async {
+                            while let Some(bytes) = read_rx.recv().await {
+                                pump_chunk(&rt, bytes);
+                            }
+                        })
+                        .await;
                         finalize_exit(&rt, status);
                         return;
                     }
