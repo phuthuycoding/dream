@@ -101,10 +101,19 @@ async fn requests_without_a_token_are_rejected_with_401() {
     let base = spawn_server(data.path()).await;
     let client = reqwest::Client::new();
 
-    // Auth is required on EVERY route — static shell, REST, mutations and
-    // the global clean endpoint alike (task-006-brief constraint).
+    // The token gate applies to `/api/*` and the WS upgrade only; the
+    // static shell is public because browser subresource fetches
+    // (`<script src>`, `<link>`) cannot carry auth headers (BUG-E2E-001).
+    for url in [format!("{base}/"), format!("{base}/app.js")] {
+        let resp = client.get(&url).send().await.expect("request");
+        assert_eq!(
+            resp.status(),
+            StatusCode::OK,
+            "GET {url} without a token must serve the public static shell"
+        );
+    }
+
     for (method, url) in [
-        ("GET", format!("{base}/")),
         ("GET", format!("{base}/api/sessions")),
         ("POST", format!("{base}/api/sessions")),
         ("GET", format!("{base}/api/sessions/{}", session.id)),
@@ -137,19 +146,30 @@ async fn requests_with_a_wrong_token_are_rejected_with_401() {
     let base = spawn_server(data.path()).await;
     let client = reqwest::Client::new();
 
-    for url in [format!("{base}/"), format!("{base}/api/sessions")] {
-        let resp = client
-            .get(&url)
-            .bearer_auth("wrong-token")
-            .send()
-            .await
-            .expect("request");
-        assert_eq!(
-            resp.status(),
-            StatusCode::UNAUTHORIZED,
-            "GET {url} with a wrong bearer token must be 401"
-        );
-    }
+    // A wrong bearer cannot block the public static shell.
+    let resp = client
+        .get(format!("{base}/"))
+        .bearer_auth("wrong-token")
+        .send()
+        .await
+        .expect("request");
+    assert_eq!(
+        resp.status(),
+        StatusCode::OK,
+        "GET / with a wrong bearer still serves the public shell"
+    );
+
+    let resp = client
+        .get(format!("{base}/api/sessions"))
+        .bearer_auth("wrong-token")
+        .send()
+        .await
+        .expect("request");
+    assert_eq!(
+        resp.status(),
+        StatusCode::UNAUTHORIZED,
+        "GET /api/sessions with a wrong bearer token must be 401"
+    );
 }
 
 #[tokio::test]
