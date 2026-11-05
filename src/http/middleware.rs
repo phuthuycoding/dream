@@ -14,8 +14,8 @@ use crate::http::routes::AppState;
 /// boot the SPA (BUG-E2E-001), so GETs outside `/api/` pass unauthenticated
 /// — a `?token=` share link still works, it is simply unnecessary.
 /// Everything else — all of `/api/*` plus non-GET requests — requires
-/// `Authorization: Bearer <token>`, or `?token=` on the WS upgrade whose
-/// browser client cannot set headers.
+/// `Authorization: Bearer <token>`, or `?token=` on the WS attach route
+/// whose browser client cannot set headers.
 pub async fn require_token(
     State(state): State<AppState>,
     request: Request,
@@ -35,7 +35,19 @@ fn is_static_get(request: &Request) -> bool {
 
 fn is_authorized(request: &Request, token: &str) -> bool {
     bearer_token(request) == Some(token)
-        || (is_ws_upgrade(request) && query_token(request) == Some(token))
+        || (is_ws_upgrade(request)
+            && is_ws_attach_path(request.uri().path())
+            && query_token(request) == Some(token))
+}
+
+/// The only path where `?token=` is honoured: `GET /api/sessions/{id}/ws`.
+/// Without the path check, any `/api/*` GET carrying a forged
+/// `Upgrade: websocket` header would authenticate on the query token
+/// alone — the upgrade header is just a string any client can send.
+fn is_ws_attach_path(path: &str) -> bool {
+    path.strip_prefix("/api/sessions/")
+        .and_then(|rest| rest.strip_suffix("/ws"))
+        .is_some_and(|id| !id.is_empty() && !id.contains('/'))
 }
 
 /// True when the request asks for a websocket upgrade.

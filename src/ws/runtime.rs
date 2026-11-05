@@ -81,6 +81,13 @@ pub struct SessionRuntime {
     retained_scrollback: Vec<Vec<u8>>,
     tx: broadcast::Sender<LiveEvent>,
     alive: AtomicBool,
+    // False once the runtime has been evicted in favour of a fresh
+    // spawn: the still-draining pump must not keep appending into the
+    // log path its replacement just truncated — this runtime's
+    // `ReplayLog` writes through a different mutex than the fresh log,
+    // so drained output would land torn inside the winner's file.
+    // Broadcast to still-attached clients is unaffected.
+    appends_enabled: AtomicBool,
 }
 
 impl SessionRuntime {
@@ -115,8 +122,10 @@ impl SessionRuntime {
             warn!(session_pty = %self.pty_id(), error = %err, "pty resize failed");
         }
         lock(&self.vt).resize(cols, rows);
-        if let Err(err) = lock(&self.log).append_resize(cols, rows) {
-            warn!(session_pty = %self.pty_id(), error = %err, "replay log resize append failed");
+        if self.appends_enabled.load(Ordering::SeqCst) {
+            if let Err(err) = lock(&self.log).append_resize(cols, rows) {
+                warn!(session_pty = %self.pty_id(), error = %err, "replay log resize append failed");
+            }
         }
     }
 
@@ -146,6 +155,16 @@ impl SessionRuntime {
     /// a runtime replaced by respawn/resurrect.
     pub(crate) fn kill(&self) -> anyhow::Result<()> {
         lock(&self.pty).kill()
+    }
+
+    /// Stop this runtime's replay-log writes. Called when the runtime is
+    /// evicted in favour of a fresh spawn: its pump keeps draining up to
+    /// `EXIT_DRAIN_TIMEOUT` past the kill, and every file write it still
+    /// makes races the winner's `ReplayLog::create` under a different
+    /// mutex. Live broadcast to attached clients continues; only the
+    /// file appends stop.
+    fn disable_log_appends(&self) {
+        self.appends_enabled.store(false, Ordering::SeqCst);
     }
 
     /// Push one live event to every attached client; the lifecycle layer
@@ -206,8 +225,11 @@ pub async fn attach_runtime(
             Some(rt) if rt.is_alive() => rt.clone(),
             // Registry may still say Live while the shell is gone: the
             // stale runtime is dropped; its replacement is the lifecycle
-            // layer's call, not this attach's.
-            Some(_) => {
+            // layer's call, not this attach's. Gating its appends first
+            // keeps an in-flight `append_exit` from landing inside the
+            // fresh log that replacement is about to create.
+            Some(stale) => {
+                stale.disable_log_appends();
                 guard.remove(&session.id);
                 return Ok(None);
             }
@@ -246,6 +268,11 @@ pub(crate) async fn spawn_fresh(
     // fresh log truncates the file its pump may still append to.
     let old = runtimes().lock().await.remove(&session.id);
     if let Some(old) = old {
+        // The evicted pump keeps draining up to EXIT_DRAIN_TIMEOUT past
+        // the kill; gate its file writes before the fresh log is created
+        // so drained output and the 'x' exit cannot land inside it
+        // through a foreign mutex.
+        old.disable_log_appends();
         if let Err(err) = old.kill() {
             warn!(session_pty = %old.pty_id(), error = %err, "kill of replaced runtime failed");
         }
@@ -259,12 +286,13 @@ pub(crate) async fn spawn_fresh(
         tokio::task::spawn_blocking(move || pre_spawn_scrollback(&scrollback_session))
             .await
             .context("pre-spawn scrollback task failed to join")?;
-    let rt = spawn(session, retained, log_cap).await?;
+    let (rt, read_rx, exit_rx) = spawn(session, retained, log_cap).await?;
     let mut guard = runtimes().lock().await;
     if let Some(newer) = guard.get(&session.id) {
         // A concurrent spawn for this session won the swap while our
         // shell was being set up; retire ours and hand back theirs so
-        // every caller lands on the same live shell.
+        // every caller lands on the same live shell. Its pump never
+        // started, so nothing of ours can touch the winner's log.
         let newer = newer.clone();
         drop(guard);
         if let Err(err) = rt.kill() {
@@ -273,6 +301,11 @@ pub(crate) async fn spawn_fresh(
         return Ok(newer);
     }
     guard.insert(session.id.clone(), rt.clone());
+    drop(guard);
+    // The pump starts only once the map names this runtime, so
+    // `runtime_entry` (clean_log) and every other map consumer see a
+    // runtime before its pump can append — never after.
+    tokio::spawn(pump(rt.clone(), read_rx, exit_rx));
     Ok(rt)
 }
 
@@ -356,10 +389,13 @@ pub(crate) fn tail_within(payloads: Vec<Vec<u8>>, n_bytes: u64) -> Vec<Vec<u8>> 
     payloads[from..].to_vec()
 }
 
-/// Spawn `session.cmd` on a pty, open its fresh replay log, and start the
-/// pump task that drives emulator/log/broadcast. `retained_scrollback`
-/// is the log tail captured before the fresh `ReplayLog::create`
-/// truncated it; the runtime replays it as scrollback prefix.
+/// Spawn `session.cmd` on a pty and open its fresh replay log, returning
+/// the runtime plus the pump's channels — the caller starts the pump
+/// task only after the runtime has entered the shared map, so a runtime
+/// whose pump can append is always visible to `runtime_entry` and the
+/// other map consumers. `retained_scrollback` is the log tail captured
+/// before the fresh `ReplayLog::create` truncated it; the runtime
+/// replays it as scrollback prefix.
 ///
 /// `session.cmd` is a shell command line, not an argv: it runs through
 /// `sh -c` so quoting, pipes and compound commands behave the way the
@@ -368,7 +404,11 @@ async fn spawn(
     session: &Session,
     retained_scrollback: Vec<Vec<u8>>,
     log_cap: u64,
-) -> anyhow::Result<Arc<SessionRuntime>> {
+) -> anyhow::Result<(
+    Arc<SessionRuntime>,
+    mpsc::Receiver<Vec<u8>>,
+    watch::Receiver<Option<ExitStatus>>,
+)> {
     anyhow::ensure!(
         !session.cmd.trim().is_empty(),
         "session cmd is empty"
@@ -376,6 +416,10 @@ async fn spawn(
     let mut cmd = CommandBuilder::new("sh");
     cmd.arg("-c");
     cmd.arg(session.cmd.as_str());
+    // The builder snapshots the daemon's whole environment; the auth
+    // token must not leak into the shell's env or, via `env`/`export`
+    // output, into the replay transcript.
+    cmd.env_remove("WEBTERM_AUTH_TOKEN");
     // The header advertises xterm-256color; without these a pty child
     // launched under a minimal environment (launchd, systemd) has no
     // TERM at all and full-screen apps degrade or refuse to run.
@@ -408,10 +452,10 @@ async fn spawn(
         retained_scrollback,
         tx,
         alive: AtomicBool::new(true),
+        appends_enabled: AtomicBool::new(true),
     });
 
-    tokio::spawn(pump(rt.clone(), read_rx, exit_rx));
-    Ok(rt)
+    Ok((rt, read_rx, exit_rx))
 }
 
 /// Drain pty output into emulator + replay log + broadcast until the child
@@ -474,8 +518,12 @@ async fn pump(
 fn pump_chunk(rt: &Arc<SessionRuntime>, bytes: Vec<u8>) {
     let mut vt = lock(&rt.vt);
     vt.feed(&bytes);
-    if let Err(err) = lock(&rt.log).append_output(&bytes) {
-        warn!(session_pty = %rt.pty_id(), error = %err, "replay log append failed");
+    // An evicted runtime keeps draining to its attached clients but must
+    // not write into the log file its replacement already owns.
+    if rt.appends_enabled.load(Ordering::SeqCst) {
+        if let Err(err) = lock(&rt.log).append_output(&bytes) {
+            warn!(session_pty = %rt.pty_id(), error = %err, "replay log append failed");
+        }
     }
     // No receivers yet is expected between detaches.
     let _ = rt.tx.send(LiveEvent::Output(bytes));
@@ -484,8 +532,10 @@ fn pump_chunk(rt: &Arc<SessionRuntime>, bytes: Vec<u8>) {
 fn finalize_exit(rt: &Arc<SessionRuntime>, status: ExitStatus) {
     let code = status.exit_code() as i32;
     rt.alive.store(false, Ordering::SeqCst);
-    if let Err(err) = lock(&rt.log).append_exit(code) {
-        warn!(session_pty = %rt.pty_id(), error = %err, "replay log exit append failed");
+    if rt.appends_enabled.load(Ordering::SeqCst) {
+        if let Err(err) = lock(&rt.log).append_exit(code) {
+            warn!(session_pty = %rt.pty_id(), error = %err, "replay log exit append failed");
+        }
     }
     let notice = format!(
         "session ended (exit {code}); respawn: POST /api/sessions/{}/respawn",
