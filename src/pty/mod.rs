@@ -2,12 +2,12 @@
 //!
 //! portable-pty does blocking `std::io` on the master side, so each handle
 //! owns dedicated threads rather than `.await`ing on the pty: a reader
-//! pumping bytes into a tokio mpsc channel, a writer fed by a std mpsc
-//! channel, and a supervisor that owns the `Child` and publishes its exit
-//! status on a watch channel.
+//! pumping bytes into a tokio mpsc channel, a writer fed by a bounded
+//! std mpsc channel, and a supervisor that owns the `Child` and
+//! publishes its exit status on a watch channel.
 
 use std::io::{self, Read, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::mpsc as std_mpsc;
 use std::thread;
 use std::time::Duration;
@@ -19,6 +19,7 @@ use uuid::Uuid;
 
 const READ_BUF_SIZE: usize = 8 * 1024;
 const READ_CHAN_CAPACITY: usize = 64;
+const WRITE_CHAN_CAPACITY: usize = 64;
 const SUPERVISOR_POLL: Duration = Duration::from_millis(25);
 
 /// read(2) on a pty master fails with EIO once the last slave fd is gone;
@@ -32,7 +33,7 @@ const ERRNO_EIO: i32 = 5;
 pub struct PtyHandle {
     pub id: Uuid,
     master: Box<dyn MasterPty>,
-    writer_tx: std_mpsc::Sender<Vec<u8>>,
+    writer_tx: std_mpsc::SyncSender<Vec<u8>>,
     kill_tx: std_mpsc::Sender<()>,
     exit_rx: watch::Receiver<Option<ExitStatus>>,
     read_rx: Option<mpsc::Receiver<Vec<u8>>>,
@@ -45,9 +46,15 @@ impl PtyHandle {
     /// a shell prelude that runs before anything written later (so exported
     /// variables are visible to subsequent commands).
     ///
-    /// openpty + `spawn_command` run on a dedicated OS thread: spawn_command
-    /// uses `pre_exec`, which forks; forking inside a busy multi-threaded
-    /// runtime is a documented crash source on macOS.
+    /// openpty + `spawn_command` are blocking `std::io`, so `spawn` blocks
+    /// the calling thread until the child is up. `spawn_command` forks via
+    /// `pre_exec`; forking inside a busy multi-threaded runtime is a
+    /// documented crash source on macOS, and that risk is process-wide —
+    /// no thread choice at this call site changes it. What the caller does
+    /// control is which thread is stalled: async callers must use
+    /// [`spawn_async`](Self::spawn_async), which runs this whole function
+    /// on `tokio::task::spawn_blocking` instead of blocking a runtime
+    /// worker.
     pub fn spawn(
         cwd: &Path,
         setup_script: Option<&str>,
@@ -55,26 +62,19 @@ impl PtyHandle {
     ) -> anyhow::Result<Self> {
         cmd.cwd(cwd.as_os_str());
 
-        let (master, child) = thread::Builder::new()
-            .name("pty-spawn".into())
-            .spawn(move || -> anyhow::Result<_> {
-                let pair = native_pty_system()
-                    .openpty(PtySize::default())
-                    .map_err(|e| e.context("openpty"))?;
-                let child = pair
-                    .slave
-                    .spawn_command(cmd)
-                    .map_err(|e| e.context("spawn command into pty"))?;
-                // The child inherited its own slave fd during fork; ours must
-                // be closed or the master never sees end-of-stream. Queued
-                // output is still delivered to the master before the
-                // terminating EIO, so the reader drains everything.
-                drop(pair.slave);
-                Ok((pair.master, child))
-            })
-            .context("spawn pty-spawn thread")?
-            .join()
-            .map_err(|_| anyhow!("pty spawn thread panicked"))??;
+        let pair = native_pty_system()
+            .openpty(PtySize::default())
+            .map_err(|e| e.context("openpty"))?;
+        let child = pair
+            .slave
+            .spawn_command(cmd)
+            .map_err(|e| e.context("spawn command into pty"))?;
+        // The child inherited its own slave fd during fork; ours must
+        // be closed or the master never sees end-of-stream. Queued
+        // output is still delivered to the master before the
+        // terminating EIO, so the reader drains everything.
+        drop(pair.slave);
+        let master = pair.master;
 
         let id = Uuid::new_v4();
 
@@ -87,7 +87,7 @@ impl PtyHandle {
             .spawn(move || read_loop(reader, read_tx, id))
             .context("spawn pty reader thread")?;
 
-        let (writer_tx, writer_rx) = std_mpsc::channel::<Vec<u8>>();
+        let (writer_tx, writer_rx) = std_mpsc::sync_channel::<Vec<u8>>(WRITE_CHAN_CAPACITY);
         let writer = master
             .take_writer()
             .map_err(|e| e.context("take pty writer"))?;
@@ -121,6 +121,20 @@ impl PtyHandle {
         Ok(handle)
     }
 
+    /// Async variant of [`spawn`](Self::spawn): the blocking openpty +
+    /// `spawn_command` work runs on `tokio::task::spawn_blocking`, so no
+    /// tokio worker stalls while the child comes up. Arguments are owned
+    /// because the blocking closure must be `'static`.
+    pub async fn spawn_async(
+        cwd: PathBuf,
+        setup_script: Option<String>,
+        cmd: CommandBuilder,
+    ) -> anyhow::Result<Self> {
+        tokio::task::spawn_blocking(move || Self::spawn(&cwd, setup_script.as_deref(), cmd))
+            .await
+            .context("pty spawn task failed to join")?
+    }
+
     /// Take the stream of pty output chunks. May only be called once.
     pub fn read(&mut self) -> mpsc::Receiver<Vec<u8>> {
         self.read_rx
@@ -129,11 +143,14 @@ impl PtyHandle {
     }
 
     /// Queue bytes for the child's stdin. Fails once the writer thread is
-    /// gone (session ended or a previous write errored).
+    /// gone (session ended or a previous write errored), or when the
+    /// bounded queue is full — the child is not draining stdin fast
+    /// enough; retrying later is the caller's decision.
     pub fn write(&self, bytes: &[u8]) -> anyhow::Result<()> {
-        self.writer_tx
-            .send(bytes.to_vec())
-            .map_err(|_| anyhow!("pty writer thread is gone"))
+        self.writer_tx.try_send(bytes.to_vec()).map_err(|e| match e {
+            std_mpsc::TrySendError::Full(_) => anyhow!("pty writer queue is full"),
+            std_mpsc::TrySendError::Disconnected(_) => anyhow!("pty writer thread is gone"),
+        })
     }
 
     /// Resize the pty; the kernel reports SIGWINCH to the child.
