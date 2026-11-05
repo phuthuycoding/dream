@@ -14,7 +14,7 @@ async fn main() -> anyhow::Result<()> {
         .init();
 
     let cli = cli::Cli::parse();
-    let cfg = config::Config::from_cli(&cli)?;
+    let cfg = config::Config::load(&cli)?;
 
     let app = Router::new().route("/", get(|| async { "webterm" }));
 

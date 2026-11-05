@@ -7,7 +7,7 @@ pub struct Cli {
     #[arg(long, default_value_t = 4020)]
     pub port: u16,
 
-    /// Address to bind (default 127.0.0.1; use --public for non-loopback)
+    /// Address to bind (default 127.0.0.1; non-loopback requires --public)
     #[arg(long)]
     pub bind: Option<String>,
 
@@ -15,11 +15,11 @@ pub struct Cli {
     #[arg(long)]
     pub data_dir: Option<String>,
 
-    /// Auth token; when absent, one is generated at first run
+    /// Auth token; when absent, one is generated and stored in the data dir
     #[arg(long)]
     pub auth_token: Option<String>,
 
-    /// Bind a non-loopback interface (prints a security warning)
+    /// Allow binding a non-loopback interface (prints a security warning)
     #[arg(long)]
     pub public: bool,
 }

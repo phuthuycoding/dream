@@ -1,4 +1,7 @@
+use std::net::IpAddr;
 use std::path::PathBuf;
+
+use anyhow::bail;
 
 use crate::cli::Cli;
 
@@ -6,16 +9,33 @@ use crate::cli::Cli;
 #[allow(dead_code)] // fields are consumed by later tasks (auth, http, state)
 pub struct Config {
     pub port: u16,
-    pub bind: String,
+    pub bind: IpAddr,
     pub data_dir: PathBuf,
     pub auth_token: Option<String>,
     pub public: bool,
 }
 
 impl Config {
-    pub fn from_cli(cli: &Cli) -> anyhow::Result<Self> {
-        let bind = cli.bind.clone().unwrap_or_else(|| "127.0.0.1".to_string());
-        let public = cli.public || !is_loopback(&bind);
+    pub fn load(cli: &Cli) -> anyhow::Result<Self> {
+        let bind: IpAddr = cli
+            .bind
+            .as_deref()
+            .unwrap_or("127.0.0.1")
+            .parse()
+            .map_err(|_| anyhow::anyhow!("invalid --bind address: {}", cli.bind.as_deref().unwrap_or("")))?;
+        let public = cli.public || !bind.is_loopback();
+        if !bind.is_loopback() && !cli.public {
+            bail!(
+                "refusing to bind non-loopback address {bind} without --public; \
+                 exposing a terminal on a public interface is dangerous"
+            );
+        }
+        if public && !bind.is_loopback() {
+            eprintln!(
+                "WARNING: binding {bind} exposes webterm on a non-loopback interface. \
+                 Anyone reaching this address with the token gets a shell."
+            );
+        }
         let data_dir = cli
             .data_dir
             .clone()
@@ -32,15 +52,15 @@ impl Config {
     }
 
     pub fn listen_addr(&self) -> String {
-        format!("{}:{}", self.bind, self.port)
+        if self.bind.is_ipv6() {
+            format!("[{}]:{}", self.bind, self.port)
+        } else {
+            format!("{}:{}", self.bind, self.port)
+        }
     }
 }
 
-fn is_loopback(bind: &str) -> bool {
-    matches!(bind, "127.0.0.1" | "::1" | "localhost")
-}
-
-fn default_data_dir() -> PathBuf {
+pub fn default_data_dir() -> PathBuf {
     dirs::data_dir()
         .unwrap_or_else(|| PathBuf::from("."))
         .join("webterm")
