@@ -120,7 +120,7 @@ fn snapshots_are_deterministic_for_identical_input() {
 
 #[test]
 fn snapshot_replayed_into_a_fresh_emulator_reproduces_the_identical_screen() {
-    let mut live = fed_tui();
+    let live = fed_tui();
     let snap = live.snapshot();
 
     let mut attached = VtEmu::new(80, 24);

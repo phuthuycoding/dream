@@ -7,9 +7,8 @@
 //!
 //! Assumed surface (the dev pass reconciles — task-007-tests-report.md):
 //!   - `crate::ws::frame::Frame` — `Debug + Clone + PartialEq` enum:
-//!       client → `Input(Vec<u8>)` 'i', `Resize { cols, rows }` 'r'
-//!       server → `Output(Vec<u8>)` 'o', `Snapshot(Vec<u8>)` 's',
-//!                `End(Vec<u8>)` 'e', `Attention` 'a'
+//!     client → `Input(Vec<u8>)` 'i', `Resize { cols, rows }` 'r'
+//!     server → `Output(Vec<u8>)` 'o', `Snapshot(Vec<u8>)` 's', `End(Vec<u8>)` 'e', `Attention` 'a'
 //!     wire layout: byte 0 = ASCII opcode, remainder = payload verbatim
 //!   - `Frame::encode(&self) -> Vec<u8>`
 //!   - `Frame::decode(&[u8]) -> Result<Frame, _>` — clean `Err` on unknown

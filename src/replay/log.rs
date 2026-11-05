@@ -91,7 +91,7 @@ impl ReplayLog {
     fn append_event(&mut self, code: &str, data: &str) -> io::Result<()> {
         let event = serde_json::json!([self.start.elapsed().as_secs_f64(), code, data]);
         let mut line = serde_json::to_string(&event)
-            .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+            .map_err(io::Error::other)?;
         line.push('\n');
         self.file.seek(SeekFrom::End(0))?;
         self.file.write_all(line.as_bytes())?;
@@ -279,7 +279,7 @@ mod tests {
         let mut appended: Vec<Vec<u8>> = Vec::new();
         for i in 0..24u32 {
             let mut payload = format!("chunk-{i:04}-").into_bytes();
-            payload.extend(std::iter::repeat(b'x').take(1024));
+            payload.extend(std::iter::repeat_n(b'x', 1024));
             log.append_output(&payload).unwrap();
             appended.push(payload);
         }
@@ -321,7 +321,7 @@ mod tests {
         let mut appended: Vec<Vec<u8>> = Vec::new();
         for i in 0..10u8 {
             let mut payload = format!("event-{i:02}-").into_bytes();
-            payload.extend(std::iter::repeat(b'y').take(128));
+            payload.extend(std::iter::repeat_n(b'y', 128));
             log.append_output(&payload).unwrap();
             appended.push(payload);
         }

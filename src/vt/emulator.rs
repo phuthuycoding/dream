@@ -40,6 +40,6 @@ impl VtEmu {
     /// Attach snapshot: reset + DEC-2026-wrapped screen dump + cursor state.
     /// Deterministic — a pure function of the current screen state.
     pub fn snapshot(&self) -> Vec<u8> {
-        snapshot::build(&self.parser.screen())
+        snapshot::build(self.parser.screen())
     }
 }

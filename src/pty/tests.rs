@@ -143,7 +143,7 @@ async fn shell_exit_is_observable_with_its_exit_status() {
 
     let mut cmd = CommandBuilder::new("sh");
     cmd.args(["-c", "exit 7"]);
-    let mut handle = spawn_in(&temp, None, cmd);
+    let handle = spawn_in(&temp, None, cmd);
     let mut exit_rx = handle.wait_exit();
 
     timeout(EXIT_TIMEOUT, wait_until_exited(&mut exit_rx))
@@ -157,7 +157,7 @@ async fn shell_exit_is_observable_with_its_exit_status() {
 #[tokio::test]
 async fn kill_terminates_a_shell_that_is_still_running() {
     let temp = TempDir::new().expect("create temp dir");
-    let mut handle = spawn_in(&temp, None, CommandBuilder::new("sh"));
+    let handle = spawn_in(&temp, None, CommandBuilder::new("sh"));
     let mut exit_rx = handle.wait_exit();
 
     handle.kill().expect("kill pty shell");

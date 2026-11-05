@@ -77,10 +77,7 @@ fn for_each_log(dir: &Path, op: impl Fn(&Path) -> io::Result<()>) -> io::Result<
     if failures.is_empty() {
         Ok(())
     } else {
-        Err(io::Error::new(
-            io::ErrorKind::Other,
-            format!("{} replay log(s) failed: {}", failures.len(), failures.join("; ")),
-        ))
+        Err(io::Error::other(format!("{} replay log(s) failed: {}", failures.len(), failures.join("; "))))
     }
 }
 
@@ -160,7 +157,7 @@ mod tests {
         let mut log = ReplayLog::create(path, 80, 24).unwrap();
         for i in 0..chunks {
             let mut payload = format!("fill-{i:04}-").into_bytes();
-            payload.extend(std::iter::repeat(b'z').take(chunk_size));
+            payload.extend(std::iter::repeat_n(b'z', chunk_size));
             log.append_output(&payload).unwrap();
         }
     }
