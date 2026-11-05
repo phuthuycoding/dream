@@ -4,6 +4,7 @@ pub mod middleware;
 pub mod routes;
 #[path = "static.rs"]
 pub mod static_files;
+pub mod tailscale;
 
 #[cfg(test)]
 mod tests;
