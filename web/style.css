@@ -35,13 +35,21 @@ html, body {
   display: flex;
   align-items: center;
   gap: 10px;
-  height: 44px;
-  padding: 0 12px;
+  height: 46px;
+  padding: 0 16px;
   border-bottom: 1px solid var(--border);
   background: var(--bg-card);
 }
 
-#brand { font-weight: 700; letter-spacing: 0.4px; }
+#brand {
+  font-weight: 700;
+  font-size: 15px;
+  letter-spacing: 0.3px;
+}
+#brand::before {
+  content: "▸ ";
+  color: var(--accent);
+}
 
 .pill {
   padding: 2px 10px;
@@ -59,21 +67,26 @@ html, body {
 
 .btn {
   padding: 7px 14px;
-  border-radius: 6px;
+  border-radius: 8px;
   border: 1px solid var(--border);
   background: var(--bg-hover);
   color: var(--fg);
-  font-size: 14px;
+  font-size: 13px;
+  font-weight: 500;
   cursor: pointer;
   min-height: 34px;
+  transition: border-color .15s, background .15s, color .15s, transform .05s;
 }
-.btn:hover { border-color: var(--fg-muted); }
+.btn:hover { border-color: var(--fg-muted); background: #262c34; }
+.btn:active { transform: translateY(1px); }
+.btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
-.btn.primary:hover { filter: brightness(1.15); }
+.btn.primary:hover { background: #3b8bf8; border-color: #3b8bf8; }
 .btn.ghost { background: transparent; border-color: transparent; color: var(--fg-muted); }
-.btn.ghost:hover { color: var(--fg); }
+.btn.ghost:hover { color: var(--fg); background: var(--bg-hover); }
 .btn.danger { color: var(--red); }
-.btn.small { padding: 3px 10px; font-size: 12px; min-height: 28px; }
+.btn.danger:hover { border-color: var(--red); }
+.btn.small { padding: 4px 11px; font-size: 12px; min-height: 27px; border-radius: 7px; }
 
 /* ---- layout ---- */
 
@@ -135,11 +148,16 @@ textarea { resize: vertical; font-family: ui-monospace, SFMono-Regular, Menlo, m
 .session-card {
   background: var(--bg-card);
   border: 1px solid var(--border);
-  border-radius: 10px;
-  padding: 12px;
+  border-radius: 12px;
+  padding: 14px 14px 10px;
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 10px;
+  transition: border-color .15s, box-shadow .15s;
+}
+.session-card:hover {
+  border-color: #3d444d;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35);
 }
 
 .session-head {
@@ -179,19 +197,50 @@ textarea { resize: vertical; font-family: ui-monospace, SFMono-Regular, Menlo, m
 .badge.resurrected { background: rgba(210, 153, 34, 0.15); color: var(--amber); }
 
 .session-meta {
-  color: var(--fg-muted);
-  font-size: 12px;
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  word-break: break-all;
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 3px;
+  font-size: 12px;
 }
-
+.meta-row {
+  display: flex;
+  gap: 10px;
+  min-width: 0;
+}
+.meta-row .mk {
+  flex: none;
+  width: 52px;
+  color: var(--fg-muted);
+  font-size: 11px;
+  line-height: 18px;
+  text-transform: uppercase;
+  letter-spacing: .4px;
+}
+.meta-row .mv {
+  color: var(--fg);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.meta-row .mv.mono {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11.5px;
+}
+.mv.copyable { cursor: pointer; }
+.mv.copyable:hover { color: var(--accent); text-decoration: underline dotted; }
+.mv.copyable.copied::after {
+  content: " ✓ copied";
+  color: var(--green);
+  font-size: 11px;
+}
 .session-actions {
   display: flex;
-  flex-wrap: wrap;
+  align-items: center;
   gap: 6px;
+  margin-top: auto;
+  padding-top: 4px;
+  border-top: 1px solid var(--border);
 }
 
 #dashboard-empty { text-align: center; padding: 40px 0; }

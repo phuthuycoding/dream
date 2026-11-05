@@ -50,6 +50,20 @@ pub enum Action {
     Down,
     /// Show whether the launchd agent is running and print the URL
     Status,
+    /// Restart the launchd agent
+    Restart,
+    /// Show the daemon's launchd logs
+    Logs {
+        /// Follow the log output (like tail -f)
+        #[arg(short, long)]
+        follow: bool,
+    },
+    /// Print the authenticated URL from the token file
+    Url,
+    /// List sessions via the local daemon API
+    Ps,
+    /// Diagnose the service: agent state, port, token perms, tailscale
+    Doctor,
 }
 
 impl Cli {

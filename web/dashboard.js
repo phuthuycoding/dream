@@ -32,6 +32,16 @@ function statusBadge(session) {
   return badge;
 }
 
+function relTime(iso) {
+  const then = new Date(iso).getTime();
+  if (Number.isNaN(then)) return iso;
+  const secs = Math.max(0, (Date.now() - then) / 1000);
+  if (secs < 60) return `${Math.floor(secs)}s ago`;
+  if (secs < 3600) return `${Math.floor(secs / 60)}m ago`;
+  if (secs < 86400) return `${Math.floor(secs / 3600)}h ago`;
+  return `${Math.floor(secs / 86400)}d ago`;
+}
+
 function sessionCard(session) {
   const card = document.createElement('div');
   card.className = 'session-card';
@@ -49,7 +59,6 @@ function sessionCard(session) {
   name.className = 'session-name';
   name.textContent = session.name;
   name.title = session.name;
-  name.style.cursor = 'pointer';
   name.addEventListener('click', () => {
     window.location.hash = `#/s/${session.id}`;
   });
@@ -62,18 +71,34 @@ function sessionCard(session) {
 
   const meta = document.createElement('div');
   meta.className = 'session-meta';
-  const lines = [
-    `cmd  ${session.cmd}`,
-    `cwd  ${session.cwd}`,
-    `id   ${session.id}`,
-    `created ${session.created_at}`,
-  ];
-  if (session.setup_script) lines.push(`setup ${session.setup_script}`);
-  for (const line of lines) {
-    const div = document.createElement('div');
-    div.textContent = line;
-    meta.appendChild(div);
-  }
+  const addRow = (label, value, mono, copyable, title) => {
+    const row = document.createElement('div');
+    row.className = 'meta-row';
+    const k = document.createElement('span');
+    k.className = 'mk';
+    k.textContent = label;
+    const v = document.createElement('span');
+    v.className = `mv${mono ? ' mono' : ''}${copyable ? ' copyable' : ''}`;
+    v.textContent = value;
+    v.title = title ?? value;
+    if (copyable) {
+      v.addEventListener('click', (ev) => {
+        ev.stopPropagation();
+        void navigator.clipboard.writeText(session.id).then(() => {
+          v.classList.add('copied');
+          setTimeout(() => v.classList.remove('copied'), 900);
+        });
+      });
+    }
+    row.appendChild(k);
+    row.appendChild(v);
+    meta.appendChild(row);
+  };
+  addRow('cmd', session.cmd, true);
+  addRow('cwd', session.cwd, true);
+  addRow('id', session.id.slice(0, 8), true, true, `${session.id} (click to copy)`);
+  addRow('created', relTime(session.created_at), false, false, session.created_at);
+  if (session.setup_script) addRow('setup', session.setup_script, true);
   card.appendChild(meta);
 
   const actions = document.createElement('div');
@@ -95,7 +120,7 @@ function sessionCard(session) {
   });
   mk('edit', '', 'Rename / edit metadata', () => openModal(session));
   if (session.status !== 'Dead') {
-    mk('kill', 'danger', 'Terminate the shell (session stays listed)', () =>
+    mk('kill', '', 'Terminate the shell (session stays listed)', () =>
       run(() => api.killSession(session.id)));
   } else {
     mk('respawn', '', 'Spawn a fresh shell', () =>
@@ -103,6 +128,9 @@ function sessionCard(session) {
   }
   mk('clean', '', "Reset this session's replay log", () =>
     run(() => api.cleanSession(session.id)));
+  const spacer2 = document.createElement('span');
+  spacer2.className = 'spacer';
+  actions.appendChild(spacer2);
   mk('delete', 'danger', 'Delete the session and its state', () => {
     if (window.confirm(`Delete session "${session.name}"? Its state and log are removed.`)) {
       return run(() => api.deleteSession(session.id));

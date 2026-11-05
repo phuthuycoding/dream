@@ -27,18 +27,28 @@ pub fn tailscale_guidance(port: u16) -> String {
     }
 }
 
-/// True when a `tailscale` binary is runnable on PATH. `tailscale status`
-/// exits non-zero whenever the daemon is down or tailscaled is not set up,
-/// so a bare `--version` is the reliable presence probe.
+/// True when a `tailscale` binary is runnable — on PATH, or at the
+/// well-known locations for brew/pkg installs. launchd runs agents with a
+/// minimal PATH, so the PATH probe alone reports "not found" on machines
+/// where Tailscale is installed.
 fn tailscale_on_path() -> bool {
-    Command::new("tailscale")
-        .arg("--version")
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .map(|status| status.success())
-        .unwrap_or(false)
+    const CANDIDATES: &[&str] = &[
+        "tailscale",
+        "/opt/homebrew/bin/tailscale",
+        "/usr/local/bin/tailscale",
+        "/usr/bin/tailscale",
+        "/Applications/Tailscale.app/Contents/MacOS/Tailscale",
+    ];
+    CANDIDATES.iter().any(|bin| {
+        Command::new(bin)
+            .arg("--version")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .map(|status| status.success())
+            .unwrap_or(false)
+    })
 }
 
 #[cfg(test)]
