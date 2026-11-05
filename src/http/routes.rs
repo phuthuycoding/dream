@@ -6,6 +6,7 @@
 use std::path::PathBuf;
 
 use axum::{
+    body::Bytes,
     extract::{
         ws::{WebSocket, WebSocketUpgrade},
         Path, State,
@@ -56,7 +57,11 @@ fn registry(state: &AppState) -> ApiResult<Registry> {
 }
 
 fn internal(err: anyhow::Error) -> (StatusCode, String) {
-    (StatusCode::INTERNAL_SERVER_ERROR, format!("{err:#}"))
+    tracing::error!("api handler failed: {err:#}");
+    (
+        StatusCode::INTERNAL_SERVER_ERROR,
+        "internal error".to_string(),
+    )
 }
 
 fn not_found(id: &str) -> (StatusCode, String) {
@@ -78,7 +83,7 @@ async fn get_session(
     session_or_404(&registry(&state)?, &id).map(Json)
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Default)]
 struct CreateSession {
     name: Option<String>,
     cmd: Option<String>,
@@ -86,16 +91,22 @@ struct CreateSession {
     setup_script: Option<String>,
 }
 
+/// An empty body means "default session"; a non-empty body must be valid
+/// JSON — `Option<Json<T>>` would silently swallow malformed input.
 async fn create_session(
     State(state): State<AppState>,
-    body: Option<Json<CreateSession>>,
+    body: Bytes,
 ) -> ApiResult<(StatusCode, Json<Session>)> {
-    let body = body.map(|Json(body)| body).unwrap_or(CreateSession {
-        name: None,
-        cmd: None,
-        cwd: None,
-        setup_script: None,
-    });
+    let body = if body.is_empty() {
+        CreateSession::default()
+    } else {
+        serde_json::from_slice(&body).map_err(|err| {
+            (
+                StatusCode::BAD_REQUEST,
+                format!("invalid JSON body: {err}"),
+            )
+        })?
+    };
     let cmd = body.cmd.unwrap_or_else(|| "sh".to_string());
     let name = body.name.unwrap_or_else(|| cmd.clone());
     let cwd = body.cwd.unwrap_or_else(|| PathBuf::from("."));

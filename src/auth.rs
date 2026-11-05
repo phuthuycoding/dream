@@ -1,24 +1,9 @@
 //! First-run auth token (TC-010 / UC-006 / FR-007, FR-008).
 //!
-//! Test-writer seat for TASK-006: this file currently carries ONLY the
-//! `#[cfg(test)]` suite below — no production code. The `AuthToken`
-//! implementation lands in this module; the tests already pin the contract
-//! fixed by `task-006-brief.md`:
-//!
-//! ```text
-//! AuthToken::load_or_generate(data_dir) -> token + first-run flag
-//! ```
-//!
-//! Assumed shape (the dev pass reconciles — see task-006-tests-report.md):
-//!
-//! ```text
-//! pub struct AuthToken { pub token: String, pub first_run: bool }
-//! pub fn load_or_generate(data_dir: &Path) -> anyhow::Result<AuthToken>
-//! ```
-//!
-//! "Printed exactly once" is asserted through the `first_run` flag: printing
-//! the URL is the caller's job (main.rs), so the observable unit-test contract
-//! is `first_run == true` on generation and `false` on every later load.
+//! `AuthToken::load_or_generate` returns the bearer token persisted in the
+//! data dir, generating a fresh random one (written owner-only, mode 0600)
+//! on first run. `first_run` is `true` only on the generating call, so the
+//! caller (main.rs) can print the authed URL exactly once.
 
 use std::fs;
 use std::io::{ErrorKind, Write};
@@ -49,6 +34,7 @@ impl AuthToken {
             Ok(contents) => {
                 let token = contents.trim();
                 if !token.is_empty() {
+                    ensure_owner_only(&path)?;
                     return Ok(AuthToken {
                         token: token.to_string(),
                         first_run: false,
@@ -96,12 +82,20 @@ fn write_token_file(path: &Path, token: &str) -> anyhow::Result<()> {
         .with_context(|| format!("cannot write token file {}", path.display()))?;
     file.sync_all()
         .with_context(|| format!("cannot fsync token file {}", path.display()))?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(path, fs::Permissions::from_mode(0o600))
-            .with_context(|| format!("cannot set 0600 on token file {}", path.display()))?;
-    }
+    ensure_owner_only(path)
+}
+
+/// Force owner-only permissions on an existing token file — the mode can
+/// drift when an operator rotates the token by hand. No-op off unix.
+#[cfg(unix)]
+fn ensure_owner_only(path: &Path) -> anyhow::Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    fs::set_permissions(path, fs::Permissions::from_mode(0o600))
+        .with_context(|| format!("cannot set 0600 on token file {}", path.display()))
+}
+
+#[cfg(not(unix))]
+fn ensure_owner_only(_path: &Path) -> anyhow::Result<()> {
     Ok(())
 }
 

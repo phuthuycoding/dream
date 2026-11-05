@@ -10,8 +10,9 @@ use axum::{
 use crate::http::routes::AppState;
 
 /// Reject with 401 unless the request carries the token either as
-/// `Authorization: Bearer <token>` or as a `?token=` query parameter — the
-/// channel the browser WS client uses, since it cannot set headers.
+/// `Authorization: Bearer <token>` or, on WS-upgrade requests only, as a
+/// `?token=` query parameter — the channel the browser WS client uses, since
+/// it cannot set headers. Scoping keeps the secret out of plain REST URLs.
 pub async fn require_token(
     State(state): State<AppState>,
     request: Request,
@@ -25,7 +26,18 @@ pub async fn require_token(
 }
 
 fn is_authorized(request: &Request, token: &str) -> bool {
-    bearer_token(request) == Some(token) || query_token(request) == Some(token)
+    bearer_token(request) == Some(token)
+        || (is_ws_upgrade(request) && query_token(request) == Some(token))
+}
+
+/// True when the request asks for a websocket upgrade — the only route class
+/// where `?token=` is honoured.
+fn is_ws_upgrade(request: &Request) -> bool {
+    request
+        .headers()
+        .get(header::UPGRADE)
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|value| value.eq_ignore_ascii_case("websocket"))
 }
 
 fn bearer_token(request: &Request) -> Option<&str> {
