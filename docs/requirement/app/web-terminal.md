@@ -8,6 +8,8 @@ status: confirmed
 
 # Spec Requirement
 
+> **Partly superseded by `cli-lifecycle`.** The binary name is `dream`, and always-on across login is `dream up` (launchd on macOS, systemd --user on Linux), not an open question or a documented recipe only. Kept for history.
+
 ## Feature
 web-terminal
 
