@@ -27,7 +27,7 @@ pub struct Session {
     pub setup_script: Option<String>,
     pub status: Status,
     pub created_at: DateTime<Utc>,
-    /// `<data_dir>/sessions/<id>/replay.log`.
+    /// `<data_dir>/sessions/<id>/replay.cast`.
     pub log_path: PathBuf,
     /// Set when the session was resurrected after a daemon restart.
     #[serde(default)]

@@ -1,6 +1,6 @@
 //! Filesystem-backed session registry.
 //!
-//! Layout: `<data_dir>/sessions/<session-id>/{session.json, replay.log}`.
+//! Layout: `<data_dir>/sessions/<session-id>/{session.json, replay.cast}`.
 //! `session.json` writes are atomic (tmp file + rename). On load, a state dir
 //! without `session.json` is skipped silently and a corrupt one is quarantined
 //! (renamed aside) — startup load never fails on a single bad session.
@@ -17,7 +17,7 @@ use crate::model::{Session, Status};
 
 const SESSIONS_DIR: &str = "sessions";
 const SESSION_FILE: &str = "session.json";
-const LOG_FILE: &str = "replay.log";
+const LOG_FILE: &str = "replay.cast";
 
 /// In-memory view of every persisted session under a data dir.
 pub struct Registry {
@@ -177,7 +177,7 @@ impl Registry {
         let file = dir.join(SESSION_FILE);
         let raw = match fs::read_to_string(&file) {
             Ok(raw) => raw,
-            // Orphan state dir (e.g. a stray replay.log) — nothing persisted.
+            // Orphan state dir (e.g. a stray replay.cast) — nothing persisted.
             Err(err) if err.kind() == ErrorKind::NotFound => return,
             Err(err) => {
                 warn!("skipping {}: cannot read session.json: {err}", dir.display());

@@ -79,8 +79,8 @@ fn create_save_and_reload_preserves_all_session_fields() {
     );
     assert_eq!(
         PathBuf::from(&s.log_path),
-        state_dir(data.path(), &id).join("replay.log"),
-        "log path points at the session's replay.log"
+        state_dir(data.path(), &id).join("replay.cast"),
+        "log path points at the session's replay.cast"
     );
     assert!(
         !s.resurrected,
