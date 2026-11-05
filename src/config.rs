@@ -36,7 +36,9 @@ impl Config {
         if public && !bind.is_loopback() {
             eprintln!(
                 "WARNING: binding {bind} exposes webterm on a non-loopback interface. \
-                 Anyone reaching this address with the token gets a shell."
+                 Traffic is cleartext HTTP — the token and all terminal I/O \
+                 are sniffable. Anyone reaching this address with the token \
+                 gets a shell."
             );
         }
         let data_dir = cli
