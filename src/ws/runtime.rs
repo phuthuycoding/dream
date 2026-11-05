@@ -53,6 +53,9 @@ pub enum LiveEvent {
     Output(Vec<u8>),
     /// The shell ended; sent as an `e` frame carrying the notice text.
     Ended(String),
+    /// Attention flag set (bell in output or output idle); sent as an
+    /// `a` frame. Emitted by the lifecycle layer via [`SessionRuntime::notify`].
+    Attention,
 }
 
 /// The running state of one spawned session shell.
@@ -113,6 +116,19 @@ impl SessionRuntime {
     /// DEC-2026-wrapped attach snapshot of the current screen.
     pub fn snapshot(&self) -> Vec<u8> {
         lock(&self.vt).snapshot()
+    }
+
+    /// Terminate the child shell; the pump still drains output and
+    /// broadcasts the end event. Lifecycle-layer use: kill, and retiring
+    /// a runtime replaced by respawn/resurrect.
+    pub(crate) fn kill(&self) -> anyhow::Result<()> {
+        lock(&self.pty).kill()
+    }
+
+    /// Push one live event to every attached client; the lifecycle layer
+    /// uses it for the `a` attention frame, which no pump chunk produces.
+    pub(crate) fn notify(&self, event: LiveEvent) {
+        let _ = self.tx.send(event);
     }
 
     /// Subscribe and snapshot under one `vt` guard. The pump feeds the
@@ -187,6 +203,35 @@ pub async fn attach_runtime(
     let rt = spawn(session).await?;
     guard.insert(session.id.clone(), rt.clone());
     Ok((rt, scrollback))
+}
+
+/// Spawn a fresh shell for `session` and swap it into the shared map,
+/// killing any prior runtime first — a respawn or daemon-restart
+/// resurrect must never leave two shells on one session. The lifecycle
+/// layer's spawn path; attaches keep using [`attach_runtime`]'s reuse.
+pub(crate) async fn spawn_fresh(session: &Session) -> anyhow::Result<Arc<SessionRuntime>> {
+    let mut guard = runtimes().lock().await;
+    if let Some(old) = guard.remove(&session.id) {
+        if let Err(err) = old.kill() {
+            warn!(session_pty = %old.pty_id(), error = %err, "kill of replaced runtime failed");
+        }
+    }
+    let rt = spawn(session).await?;
+    guard.insert(session.id.clone(), rt.clone());
+    Ok(rt)
+}
+
+/// The runtime currently registered for `session_id`, if any. Lets the
+/// lifecycle layer confirm it still owns a session's shell before acting
+/// on that shell's exit.
+pub(crate) async fn get_runtime(session_id: &str) -> Option<Arc<SessionRuntime>> {
+    runtimes().lock().await.get(session_id).cloned()
+}
+
+/// Evict `session_id`'s runtime from the shared map so a later attach can
+/// never land on it; retiring the returned runtime is the caller's job.
+pub(crate) async fn detach_runtime(session_id: &str) -> Option<Arc<SessionRuntime>> {
+    runtimes().lock().await.remove(session_id)
 }
 
 /// Tail of the on-disk log before `spawn` truncates it — the scrollback a

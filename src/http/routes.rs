@@ -4,6 +4,7 @@
 //! upgrade and the static fallback — sits behind the bearer-token gate.
 
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use axum::{
     body::Bytes,
@@ -19,21 +20,28 @@ use axum::{
 };
 use serde::Deserialize;
 
-use crate::model::Session;
+use crate::model::{Session, Status};
 use crate::replay::enforcer;
+use crate::runtime::{RuntimeManager, DEFAULT_IDLE_ATTENTION};
 use crate::state::registry::Registry;
 
 use crate::http::{middleware::require_token, static_files};
 
-/// Shared router state: where sessions live and the token that gates access.
+/// Shared router state: where sessions live, the token that gates access,
+/// and the lifecycle manager the mutation/attach routes delegate to.
 #[derive(Clone)]
 pub struct AppState {
     pub data_dir: PathBuf,
     pub token: String,
+    pub runtime: Arc<RuntimeManager>,
 }
 
 pub fn build_router(data_dir: PathBuf, token: String) -> Router {
-    let state = AppState { data_dir, token };
+    let state = AppState {
+        runtime: Arc::new(RuntimeManager::new(data_dir.clone(), DEFAULT_IDLE_ATTENTION)),
+        data_dir,
+        token,
+    };
     Router::new()
         .route("/api/sessions", get(list_sessions).post(create_session))
         .route(
@@ -110,11 +118,12 @@ async fn create_session(
     let cmd = body.cmd.unwrap_or_else(|| "sh".to_string());
     let name = body.name.unwrap_or_else(|| cmd.clone());
     let cwd = body.cwd.unwrap_or_else(|| PathBuf::from("."));
-    // Spawning the PTY is the lifecycle layer's job (TASK-009); the API
-    // records the session so it is listed and attachable immediately.
     let session = registry(&state)?
         .create(&name, &cmd, &cwd, body.setup_script)
         .map_err(internal)?;
+    // The shell starts on create; a spawn failure leaves the session
+    // listed (a later attach retries the spawn) but is still an error.
+    state.runtime.spawn(&session).await.map_err(internal)?;
     Ok((StatusCode::CREATED, Json(session)))
 }
 
@@ -137,26 +146,24 @@ async fn patch_session(
     session_or_404(&reg, &id).map(Json)
 }
 
-/// Kill persists `Dead`; terminating a live PTY is wired in TASK-009.
+/// Kill terminates the shell and persists `Dead`.
 async fn kill_session(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> ApiResult<Json<Session>> {
-    let mut reg = registry(&state)?;
-    session_or_404(&reg, &id)?;
-    reg.mark_dead(&id).map_err(internal)?;
-    session_or_404(&reg, &id).map(Json)
+    session_or_404(&registry(&state)?, &id)?;
+    state.runtime.kill(&id).await.map_err(internal)?;
+    session_or_404(&registry(&state)?, &id).map(Json)
 }
 
-/// Respawn persists `Live`; spawning the replacement shell is TASK-009.
+/// Respawn starts a fresh shell (setup script re-runs) and persists `Live`.
 async fn respawn_session(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> ApiResult<Json<Session>> {
-    let mut reg = registry(&state)?;
-    session_or_404(&reg, &id)?;
-    reg.respawn(&id).map_err(internal)?;
-    session_or_404(&reg, &id).map(Json)
+    let session = session_or_404(&registry(&state)?, &id)?;
+    state.runtime.respawn(&session).await.map_err(internal)?;
+    session_or_404(&registry(&state)?, &id).map(Json)
 }
 
 async fn delete_session(
@@ -165,6 +172,9 @@ async fn delete_session(
 ) -> ApiResult<StatusCode> {
     let mut reg = registry(&state)?;
     session_or_404(&reg, &id)?;
+    // Retire the shell before removing its state dir so a deleted session
+    // never leaves a running pty behind.
+    state.runtime.kill(&id).await.map_err(internal)?;
     reg.delete(&id).map_err(internal)?;
     Ok(StatusCode::NO_CONTENT)
 }
@@ -200,9 +210,19 @@ async fn ws_attach(
     Path(id): Path<String>,
 ) -> Response {
     match registry(&state).and_then(|reg| session_or_404(&reg, &id)) {
-        Ok(session) => ws
-            .on_upgrade(|socket| crate::ws::attach::attach(socket, session))
-            .into_response(),
+        Ok(session) => {
+            // Go through the manager so its runtime is the one the attach
+            // lands on and the attach clears the attention flag; dead
+            // sessions skip straight to the replay path, and a spawn
+            // failure here is retried by the attach itself.
+            if session.status != Status::Dead {
+                if let Err(err) = state.runtime.spawn_on_attach(&session).await {
+                    tracing::warn!(session = %session.id, error = %err, "pre-attach spawn failed");
+                }
+            }
+            ws.on_upgrade(|socket| crate::ws::attach::attach(socket, session))
+                .into_response()
+        }
         Err(err) => err.into_response(),
     }
 }

@@ -73,6 +73,7 @@ async fn live_attach(socket: &mut WebSocket, session: &Session) -> anyhow::Resul
                     let _ = send(socket, Frame::End(notice.into_bytes())).await;
                     return Ok(());
                 }
+                Ok(LiveEvent::Attention) => send(socket, Frame::Attention).await?,
                 Err(broadcast::error::RecvError::Lagged(skipped)) => {
                     warn!(
                         session = %session.id,

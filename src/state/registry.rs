@@ -142,6 +142,18 @@ impl Registry {
         Ok(())
     }
 
+    /// Persist the resurrected marker set by the lifecycle layer's
+    /// daemon-restart pass. Status stays as persisted — the flag alone is
+    /// what marks the session (the dashboard reads it).
+    pub fn mark_resurrected(&mut self, id: &str) -> anyhow::Result<()> {
+        let idx = self.index_of(id)?;
+        let mut session = self.sessions[idx].clone();
+        session.resurrected = true;
+        save_session(&self.session_dir(id), &session)?;
+        self.sessions[idx] = session;
+        Ok(())
+    }
+
     /// Drop the session and remove its whole state dir, replay log included.
     pub fn delete(&mut self, id: &str) -> anyhow::Result<()> {
         let idx = self.index_of(id)?;
