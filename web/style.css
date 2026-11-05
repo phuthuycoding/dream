@@ -265,6 +265,8 @@ textarea { resize: vertical; font-family: ui-monospace, SFMono-Regular, Menlo, m
 #term-overlay {
   position: absolute;
   inset: 0;
+  /* xterm layers reach z-index 11; keep the ended-session overlay above them. */
+  z-index: 1000;
   display: flex;
   align-items: center;
   justify-content: center;
