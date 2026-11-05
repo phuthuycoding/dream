@@ -13,6 +13,8 @@ const VIEWS = ['view-gate', 'view-dashboard', 'view-terminal'];
 
 let active = null; // 'dashboard' | 'terminal'
 let authed = false;
+let navGen = 0;
+let navQueue = Promise.resolve();
 
 function show(viewId) {
   for (const id of VIEWS) {
@@ -34,7 +36,18 @@ function unmountActive() {
   active = null;
 }
 
-async function route() {
+// Views keep module-level state, so two mounts in flight would corrupt
+// each other. Navigations run one at a time; a step superseded by a newer
+// hashchange while still queued bails without touching the views.
+function route() {
+  const gen = ++navGen;
+  navQueue = navQueue
+    .then(() => (gen === navGen ? applyRoute() : undefined))
+    .catch((err) => console.warn('route failed:', err));
+  return navQueue;
+}
+
+async function applyRoute() {
   if (!authed) {
     showGate();
     return;

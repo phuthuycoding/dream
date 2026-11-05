@@ -205,9 +205,11 @@ export async function mount() {
   };
   $('modal-form').onsubmit = (ev) => void submitModal(ev);
   $('modal-cancel').onclick = closeModal;
-  $('modal').addEventListener('click', (ev) => {
+  // Assignment (not addEventListener): #modal outlives mount(), so a
+  // listener would stack once per dashboard visit.
+  $('modal').onclick = (ev) => {
     if (ev.target === $('modal')) closeModal();
-  });
+  };
   await refresh();
   pollTimer = setInterval(() => {
     refresh().catch((err) => {

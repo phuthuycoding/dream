@@ -130,6 +130,9 @@ function flushScrollback() {
 }
 
 function handleSnapshot(payload) {
+  // The dump may carry DECCKM (\x1b[?1h/l); scan it like `o` frames do so
+  // soft arrows are right after a fresh attach.
+  scanCursorMode(payload);
   const geometry = parseGeometry(payload);
   if (geometry && (term.cols !== geometry.cols || term.rows !== geometry.rows)) {
     term.resize(geometry.cols, geometry.rows);
@@ -184,6 +187,7 @@ function onMessage(event) {
 
 function connect() {
   clearTimeout(reconnectTimer);
+  userClosed = false; // unmount() disarms reconnect; every attach re-arms it
   scrollback = [];
   snapshotApplied = false;
   ended = false;
@@ -338,12 +342,14 @@ export async function mount(sessionId) {
 
   for (const btn of document.querySelectorAll('#softkeys .softkey')) {
     // pointerdown (not click) keeps focus inside the xterm textarea so
-    // the virtual keyboard stays open between key taps.
-    btn.addEventListener('pointerdown', (ev) => {
+    // the virtual keyboard stays open between key taps. Assignment (not
+    // addEventListener): the buttons outlive mount(), so listeners would
+    // stack and fire once per past attach.
+    btn.onpointerdown = (ev) => {
       ev.preventDefault();
       softKey(btn.dataset.key);
-      term.focus();
-    });
+      if (term) term.focus();
+    };
   }
 
   resizeObserver = new ResizeObserver(fitSoon);
