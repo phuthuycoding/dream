@@ -322,7 +322,14 @@ pub(crate) async fn lock_runtimes(
 /// Evict `session_id`'s runtime from the shared map so a later attach can
 /// never land on it; retiring the returned runtime is the caller's job.
 pub(crate) async fn detach_runtime(session_id: &str) -> Option<Arc<SessionRuntime>> {
-    runtimes().lock().await.remove(session_id)
+    let rt = runtimes().lock().await.remove(session_id);
+    // Detached runtimes lose the right to write the file — a later
+    // respawn/clean creates or resets the log and an orphan pump's
+    // seek+write would tear it (review finding: kill path never gated).
+    if let Some(rt) = &rt {
+        rt.disable_log_appends();
+    }
+    rt
 }
 
 /// The session's runtime while the shared map still holds one — alive or

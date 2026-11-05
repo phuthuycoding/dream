@@ -53,7 +53,9 @@ impl Config {
             data_dir,
             auth_token: cli.auth_token.clone(),
             public,
-            log_cap: cli.log_cap,
+            // A tiny cap degenerates hysteresis (cap/4 headroom → 0) into a
+            // per-append rewrite; floor it at 4 KiB.
+            log_cap: cli.log_cap.map(|cap| cap.max(4096)),
             log_max_age: cli.log_max_age.map(Duration::from_secs),
         })
     }

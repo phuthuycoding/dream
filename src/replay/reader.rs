@@ -149,6 +149,14 @@ fn tail_bytes_window(
     let Some(last_nl) = buf.iter().rposition(|&b| b == b'\n') else {
         return (&buf[buf.len()..], at_region_start);
     };
+    // The torn tail must fit inside the budget too — otherwise the trim
+    // leaves the file over cap and every append re-triggers a rewrite.
+    // A tail bigger than the whole budget is kept alone (header + tail):
+    // cutting mid-line would corrupt the next append's completion.
+    let tail_len = (buf.len() - last_nl - 1) as u64;
+    let Some(budget) = n_bytes.checked_sub(tail_len) else {
+        return (&buf[last_nl + 1..], true);
+    };
     let mut used = 0u64;
     let mut kept_from = buf.len();
     let mut end = last_nl + 1;
@@ -158,7 +166,7 @@ fn tail_bytes_window(
             .rposition(|&b| b == b'\n')
             .map_or(0, |i| i + 1);
         let len = (end - line_start) as u64;
-        if used + len > n_bytes {
+        if used + len > budget {
             // Budget full — a fragment crossing the window edge only
             // grows, so nothing older fits either.
             return (&buf[kept_from..], true);
