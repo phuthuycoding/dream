@@ -6,3 +6,4 @@ pub mod cli;
 pub mod config;
 pub mod pty;
 pub mod state;
+pub mod replay;
