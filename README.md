@@ -22,6 +22,19 @@ dream                # listens on http://127.0.0.1:4020
 dream --port 8080
 ```
 
+## Service commands (macOS + Linux)
+
+```
+dream up      # install + start the service (launchd agent / systemd --user)
+dream status  # show service state + token URL
+dream restart # restart the service
+dream logs    # show daemon logs (-f to follow)
+dream url     # reprint the token URL
+dream ps      # list sessions
+dream doctor  # diagnose: service, port, token, tailscale
+dream down    # stop + remove the service
+```
+
 dream binds loopback only by default. Binding anything else requires
 `--public`, which prints a security warning — anyone who can reach the
 address *and* holds the token gets a shell on your machine.
