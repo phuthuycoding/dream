@@ -46,10 +46,11 @@ async fn live_attach(socket: &mut WebSocket, session: &Session) -> anyhow::Resul
     for bytes in scrollback {
         send(socket, Frame::Output(bytes)).await?;
     }
-    // Subscribe before the snapshot so output landing after the snapshot
-    // build is delivered as a live frame right after it.
-    let mut rx = rt.subscribe();
-    send(socket, Frame::Snapshot(rt.snapshot())).await?;
+    // Subscribe and snapshot under one `vt` guard: a chunk landing in the
+    // gap would otherwise be sent in the snapshot AND replayed as a live
+    // `o` frame, printing twice.
+    let (mut rx, snapshot) = rt.attach_view();
+    send(socket, Frame::Snapshot(snapshot)).await?;
 
     loop {
         tokio::select! {
@@ -75,8 +76,15 @@ async fn live_attach(socket: &mut WebSocket, session: &Session) -> anyhow::Resul
                 Err(broadcast::error::RecvError::Lagged(skipped)) => {
                     warn!(
                         session = %session.id,
-                        skipped, "attach lagged behind live broadcast; dropping chunks"
+                        skipped, "attach lagged behind live broadcast; resyncing with a snapshot"
                     );
+                    // The skipped chunks are a permanent hole in the `o`
+                    // stream; resubscribe + resnapshot under one `vt`
+                    // guard (same invariant as the initial attach) so the
+                    // client screen resyncs instead.
+                    let (new_rx, snapshot) = rt.attach_view();
+                    rx = new_rx;
+                    send(socket, Frame::Snapshot(snapshot)).await?;
                 }
                 Err(broadcast::error::RecvError::Closed) => return Ok(()),
             },

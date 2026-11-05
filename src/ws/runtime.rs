@@ -84,7 +84,11 @@ impl SessionRuntime {
     /// Resize the pty, the shadow emulator and the replay log in step —
     /// a later snapshot must reflect the same geometry the pty now has.
     pub fn resize(&self, cols: u16, rows: u16) {
-        if let Err(err) = lock(&self.pty).resize(cols, rows) {
+        // Bind first: an `if let` scrutinee guard temporary lives through
+        // the arm body, where `pty_id()` would re-lock the same mutex and
+        // deadlock.
+        let res = lock(&self.pty).resize(cols, rows);
+        if let Err(err) = res {
             warn!(session_pty = %self.pty_id(), error = %err, "pty resize failed");
         }
         lock(&self.vt).resize(cols, rows);
@@ -102,6 +106,18 @@ impl SessionRuntime {
     /// DEC-2026-wrapped attach snapshot of the current screen.
     pub fn snapshot(&self) -> Vec<u8> {
         lock(&self.vt).snapshot()
+    }
+
+    /// Subscribe and snapshot under one `vt` guard. The pump feeds the
+    /// emulator and broadcasts inside the same critical section, so a
+    /// chunk lands either in this snapshot or on the returned receiver —
+    /// never both (client prints it twice) and never neither (a hole).
+    pub fn attach_view(&self) -> (broadcast::Receiver<LiveEvent>, Vec<u8>) {
+        let vt = lock(&self.vt);
+        let rx = self.tx.subscribe();
+        let snapshot = vt.snapshot();
+        drop(vt);
+        (rx, snapshot)
     }
 }
 
@@ -141,16 +157,26 @@ pub async fn attach_runtime(
     let mut guard = runtimes().lock().await;
     if let Some(rt) = guard.get(&session.id) {
         if rt.is_alive() {
-            let scrollback = rt
-                .scrollback(SCROLLBACK_TAIL_BYTES)
-                .context("read retained log tail")?;
+            // `tail` is blocking file io; holding the global map lock
+            // across it must not stall an executor worker.
+            let rt2 = rt.clone();
+            let scrollback = tokio::task::spawn_blocking(move || {
+                rt2.scrollback(SCROLLBACK_TAIL_BYTES)
+            })
+            .await
+            .context("scrollback task failed to join")?
+            .context("read retained log tail")?;
             return Ok((rt.clone(), scrollback));
         }
         // Registry says Live but the previous shell is gone: the runtime
         // is stale, so the attach spawns a replacement shell.
         guard.remove(&session.id);
     }
-    let scrollback = pre_spawn_scrollback(session);
+    let scrollback_session = session.clone();
+    let scrollback =
+        tokio::task::spawn_blocking(move || pre_spawn_scrollback(&scrollback_session))
+            .await
+            .context("pre-spawn scrollback task failed to join")?;
     let rt = spawn(session).await?;
     guard.insert(session.id.clone(), rt.clone());
     Ok((rt, scrollback))
@@ -192,8 +218,15 @@ async fn spawn(session: &Session) -> anyhow::Result<Arc<SessionRuntime>> {
     let read_rx = pty.read();
     let exit_rx = pty.wait_exit();
 
-    let log = ReplayLog::create(&session.log_path, DEFAULT_COLS, DEFAULT_ROWS)
-        .with_context(|| format!("create replay log {}", session.log_path.display()))?;
+    // Blocking file create; callers hold the global runtime-map lock, so
+    // it must not run on an executor worker.
+    let log_path = session.log_path.clone();
+    let log = tokio::task::spawn_blocking(move || {
+        ReplayLog::create(&log_path, DEFAULT_COLS, DEFAULT_ROWS)
+    })
+    .await
+    .context("replay log create task failed to join")?
+    .with_context(|| format!("create replay log {}", session.log_path.display()))?;
     let (tx, _) = broadcast::channel(BROADCAST_CAPACITY);
     let rt = Arc::new(SessionRuntime {
         session_id: session.id.clone(),
@@ -219,18 +252,7 @@ async fn pump(
     loop {
         tokio::select! {
             chunk = read_rx.recv(), if reading => match chunk {
-                Some(bytes) => {
-                    // Order matters: feed the emulator and commit to the
-                    // log before broadcasting, so an attach snapshotting
-                    // mid-chunk either sees it in the screen or in the
-                    // retained tail.
-                    lock(&rt.vt).feed(&bytes);
-                    if let Err(err) = lock(&rt.log).append_output(&bytes) {
-                        warn!(session_pty = %rt.pty_id(), error = %err, "replay log append failed");
-                    }
-                    // No receivers yet is expected between detaches.
-                    let _ = rt.tx.send(LiveEvent::Output(bytes));
-                }
+                Some(bytes) => pump_chunk(&rt, bytes),
                 // Master hit end-of-stream; the exit watch fires next.
                 None => reading = false,
             },
@@ -238,6 +260,12 @@ async fn pump(
                 Ok(()) => {
                     let status = exit_rx.borrow().clone();
                     if let Some(status) = status {
+                        // The exit watch can win the select while read_rx
+                        // still buffers output; drain until the reader
+                        // closes so the final bytes reach clients and log.
+                        while let Some(bytes) = read_rx.recv().await {
+                            pump_chunk(&rt, bytes);
+                        }
                         finalize_exit(&rt, status);
                         return;
                     }
@@ -247,6 +275,21 @@ async fn pump(
             },
         }
     }
+}
+
+/// One pty output chunk: feed the emulator, commit to the replay log and
+/// broadcast inside a single `vt` critical section — an attach taking its
+/// snapshot under the same lock sees each chunk either in the screen or
+/// on its live receiver, never both (duplicate print) and never neither
+/// (a hole).
+fn pump_chunk(rt: &Arc<SessionRuntime>, bytes: Vec<u8>) {
+    let mut vt = lock(&rt.vt);
+    vt.feed(&bytes);
+    if let Err(err) = lock(&rt.log).append_output(&bytes) {
+        warn!(session_pty = %rt.pty_id(), error = %err, "replay log append failed");
+    }
+    // No receivers yet is expected between detaches.
+    let _ = rt.tx.send(LiveEvent::Output(bytes));
 }
 
 fn finalize_exit(rt: &Arc<SessionRuntime>, status: ExitStatus) {
