@@ -27,6 +27,7 @@ use tracing::warn;
 use crate::model::Session;
 use crate::pty::PtyHandle;
 use crate::replay::log::{Event, ReplayLog};
+use crate::replay::reader;
 use crate::vt::emulator::VtEmu;
 
 /// Terminal geometry assumed until a client sends its first `r` frame.
@@ -66,6 +67,11 @@ pub struct SessionRuntime {
     pty: Mutex<PtyHandle>,
     vt: Mutex<VtEmu>,
     log: Mutex<ReplayLog>,
+    // Output payloads captured from the on-disk log just before this
+    // spawn truncated it — `scrollback` prepends them to the live log's
+    // own tail so a respawn/reattach still replays the prior shell's
+    // retained output. Fixed at construction; never mutated.
+    retained_scrollback: Vec<Vec<u8>>,
     tx: broadcast::Sender<LiveEvent>,
     alive: AtomicBool,
 }
@@ -107,10 +113,13 @@ impl SessionRuntime {
         }
     }
 
-    /// Newest retained output events within `n_bytes`, oldest first.
+    /// Newest retained output within `n_bytes`, oldest first — the
+    /// pre-spawn tail captured before this runtime's fresh log truncated
+    /// the file, then the live log's own tail on top.
     pub fn scrollback(&self, n_bytes: u64) -> io::Result<Vec<Vec<u8>>> {
-        let events = lock(&self.log).tail(n_bytes)?;
-        Ok(output_payloads(events))
+        let mut payloads = self.retained_scrollback.clone();
+        payloads.extend(output_payloads(lock(&self.log).tail(n_bytes)?));
+        Ok(tail_within(payloads, n_bytes))
     }
 
     /// DEC-2026-wrapped attach snapshot of the current screen.
@@ -211,7 +220,16 @@ pub(crate) async fn spawn_fresh(session: &Session) -> anyhow::Result<Arc<Session
             warn!(session_pty = %old.pty_id(), error = %err, "kill of replaced runtime failed");
         }
     }
-    let rt = spawn(session).await?;
+    // `spawn` truncates the replay log for the new shell; capture the
+    // retained tail first so the next attach still replays it as
+    // scrollback. Blocking file io — off the executor worker, same as
+    // the `tail` read in `attach_runtime`.
+    let scrollback_session = session.clone();
+    let retained =
+        tokio::task::spawn_blocking(move || pre_spawn_scrollback(&scrollback_session))
+            .await
+            .context("pre-spawn scrollback task failed to join")?;
+    let rt = spawn(session, retained).await?;
     guard.insert(session.id.clone(), rt.clone());
     Ok(rt)
 }
@@ -232,9 +250,41 @@ pub(crate) async fn detach_runtime(session_id: &str) -> Option<Arc<SessionRuntim
     runtimes().lock().await.remove(session_id)
 }
 
+/// Output payloads of the newest whole events in the session's log within
+/// the scrollback budget — read just before `spawn` truncates the file,
+/// so an attach following the respawn still replays the prior shell's
+/// retained tail. A missing or unreadable log means none.
+fn pre_spawn_scrollback(session: &Session) -> Vec<Vec<u8>> {
+    let events = match reader::read_events(&session.log_path) {
+        Ok(events) => events,
+        Err(_) => return Vec::new(),
+    };
+    tail_within(output_payloads(events), SCROLLBACK_TAIL_BYTES)
+}
+
+/// Newest whole payloads within `n_bytes` — always at least the newest,
+/// the same suffix-window semantics `ReplayLog::tail` applies to events.
+fn tail_within(payloads: Vec<Vec<u8>>, n_bytes: u64) -> Vec<Vec<u8>> {
+    let mut used = 0u64;
+    let mut from = payloads.len();
+    for (i, bytes) in payloads.iter().enumerate().rev() {
+        if from != payloads.len() && used + bytes.len() as u64 > n_bytes {
+            break;
+        }
+        used += bytes.len() as u64;
+        from = i;
+    }
+    payloads[from..].to_vec()
+}
+
 /// Spawn `session.cmd` on a pty, open its fresh replay log, and start the
-/// pump task that drives emulator/log/broadcast.
-async fn spawn(session: &Session) -> anyhow::Result<Arc<SessionRuntime>> {
+/// pump task that drives emulator/log/broadcast. `retained_scrollback`
+/// is the log tail captured before the fresh `ReplayLog::create`
+/// truncated it; the runtime replays it as scrollback prefix.
+async fn spawn(
+    session: &Session,
+    retained_scrollback: Vec<Vec<u8>>,
+) -> anyhow::Result<Arc<SessionRuntime>> {
     let mut words = session.cmd.split_whitespace();
     let program = words.next().context("session cmd is empty")?;
     let mut cmd = CommandBuilder::new(program);
@@ -261,6 +311,7 @@ async fn spawn(session: &Session) -> anyhow::Result<Arc<SessionRuntime>> {
         pty: Mutex::new(pty),
         vt: Mutex::new(VtEmu::new(DEFAULT_COLS, DEFAULT_ROWS)),
         log: Mutex::new(log),
+        retained_scrollback,
         tx,
         alive: AtomicBool::new(true),
     });

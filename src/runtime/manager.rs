@@ -17,7 +17,6 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
@@ -40,14 +39,26 @@ pub const DEFAULT_IDLE_ATTENTION: Duration = Duration::from_secs(30);
 const MIN_TICK: Duration = Duration::from_millis(10);
 const MAX_TICK: Duration = Duration::from_secs(5);
 
-/// One managed session: its live runtime, the attention flag the monitor
-/// task flips and `spawn_on_attach` clears, and the last-output instant
-/// the idle check measures from — reset on attach alongside the flag so
-/// a cleared flag is not re-armed by a stale timestamp.
+/// One managed session: its live runtime and its attention state — the
+/// flag the monitor task sets and `spawn_on_attach` clears, plus the
+/// last-output instant the idle check measures from, under one lock so
+/// the monitor's "should idle-flag?" decision and the flag set are
+/// atomic against an attach's clear+reset.
 struct SessionEntry {
     rt: Arc<SessionRuntime>,
-    attention: AtomicBool,
-    last_output: Mutex<Instant>,
+    attention: Mutex<Attention>,
+}
+
+/// Attention flag + the instant of the last output chunk. A single
+/// mutex covers both: `spawn_on_attach` clears the flag and restarts
+/// the idle clock in one hold, so a monitor that observed
+/// `elapsed >= idle_after` before the attach either commits its flag
+/// first (the attach then clears it) or sees the post-attach timestamp
+/// and does not flag — a pre-attach observation can no longer re-arm a
+/// flag the attach just cleared.
+struct Attention {
+    flagged: bool,
+    last_output: Instant,
 }
 
 /// Lifecycle manager for one data dir. `entries` is shared with the
@@ -95,8 +106,9 @@ impl RuntimeManager {
             None => ws_runtime::spawn_fresh(session).await?,
         };
         let entry = self.register(&session.id, rt.clone());
-        entry.attention.store(false, Ordering::SeqCst);
-        *lock(&entry.last_output) = Instant::now();
+        let mut attention = lock(&entry.attention);
+        attention.flagged = false;
+        attention.last_output = Instant::now();
         Ok(rt)
     }
 
@@ -185,7 +197,7 @@ impl RuntimeManager {
     pub fn attention(&self, session_id: &str) -> bool {
         lock(&self.entries)
             .get(session_id)
-            .is_some_and(|entry| entry.attention.load(Ordering::SeqCst))
+            .is_some_and(|entry| lock(&entry.attention).flagged)
     }
 
     /// Periodic retention pass over `<data_dir>/sessions/` using
@@ -225,8 +237,10 @@ impl RuntimeManager {
         }
         let entry = Arc::new(SessionEntry {
             rt: rt.clone(),
-            attention: AtomicBool::new(false),
-            last_output: Mutex::new(Instant::now()),
+            attention: Mutex::new(Attention {
+                flagged: false,
+                last_output: Instant::now(),
+            }),
         });
         // Subscribe before the spawn returns so output produced between
         // now and the monitor task's first poll is not missed — the bell
@@ -254,19 +268,23 @@ impl RuntimeManager {
             loop {
                 // Once flagged, the flag holds until attach clears it —
                 // keep waking occasionally only to notice a missed exit.
-                let wait = if entry.attention.load(Ordering::SeqCst) {
-                    MAX_TICK
-                } else {
-                    idle_after
-                        .saturating_sub(lock(&entry.last_output).elapsed())
-                        .clamp(MIN_TICK, MAX_TICK)
+                let wait = {
+                    let attention = lock(&entry.attention);
+                    if attention.flagged {
+                        MAX_TICK
+                    } else {
+                        idle_after
+                            .saturating_sub(attention.last_output.elapsed())
+                            .clamp(MIN_TICK, MAX_TICK)
+                    }
                 };
                 tokio::select! {
                     event = rx.recv() => match event {
                         Ok(LiveEvent::Output(bytes)) => {
-                            *lock(&entry.last_output) = Instant::now();
+                            let mut attention = lock(&entry.attention);
+                            attention.last_output = Instant::now();
                             if bytes.contains(&0x07) {
-                                flag_attention(&entry);
+                                flag_attention(&mut attention, &entry.rt);
                             }
                         }
                         Ok(LiveEvent::Ended(_)) => {
@@ -282,8 +300,9 @@ impl RuntimeManager {
                             retire_dead(&entries, &data_dir, &session_id, &entry).await;
                             return;
                         }
-                        if lock(&entry.last_output).elapsed() >= idle_after {
-                            flag_attention(&entry);
+                        let mut attention = lock(&entry.attention);
+                        if attention.last_output.elapsed() >= idle_after {
+                            flag_attention(&mut attention, &entry.rt);
                         }
                     }
                 }
@@ -301,10 +320,13 @@ fn lock<'a, T>(mutex: &'a Mutex<T>) -> MutexGuard<'a, T> {
 }
 
 /// Transition the flag false→true and notify attached clients once; an
-/// already-set flag does not re-broadcast.
-fn flag_attention(entry: &SessionEntry) {
-    if !entry.attention.swap(true, Ordering::SeqCst) {
-        entry.rt.notify(LiveEvent::Attention);
+/// already-set flag does not re-broadcast. The caller already holds the
+/// attention lock, so the set is atomic with the check that triggered
+/// it — an attach's clear+reset cannot land between the two.
+fn flag_attention(attention: &mut Attention, rt: &SessionRuntime) {
+    if !attention.flagged {
+        attention.flagged = true;
+        rt.notify(LiveEvent::Attention);
     }
 }
 
