@@ -44,6 +44,22 @@ final class ProfileStore {
         try persist()
     }
 
+    /// Update profile metadata without touching the Keychain token —
+    /// rename has no new credential to write. Unknown ids are a no-op.
+    func update(_ profile: DaemonProfile) throws {
+        guard let index = profiles.firstIndex(where: { $0.id == profile.id }) else {
+            return
+        }
+        profiles[index] = profile
+        try persist()
+    }
+
+    /// Drop a profile's Keychain token while keeping the profile — the
+    /// 401 path clears the credential so the user can re-pair.
+    func clearToken(for id: UUID) throws {
+        try keychain.deleteToken(for: id.uuidString)
+    }
+
     /// Remove a profile, its Keychain token, and any active pointer to
     /// it. The token is deleted first so a metadata write failure leaves
     /// a retryable profile rather than a orphaned secret.

@@ -21,6 +21,12 @@
 		1A0000000000000000000A52 /* PairingURLParserTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A0000000000000000000A32 /* PairingURLParserTests.swift */; };
 		1A0000000000000000000A53 /* ProfileStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A0000000000000000000A33 /* ProfileStoreTests.swift */; };
 		1A0000000000000000000A54 /* StubURLProtocol.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A0000000000000000000A34 /* StubURLProtocol.swift */; };
+		1A0000000000000000000A55 /* AppState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A0000000000000000000A28 /* AppState.swift */; };
+		1A0000000000000000000A56 /* PairingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A0000000000000000000A29 /* PairingView.swift */; };
+		1A0000000000000000000A57 /* ProfileListView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A0000000000000000000A2A /* ProfileListView.swift */; };
+		1A0000000000000000000A58 /* SessionListView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A0000000000000000000A2B /* SessionListView.swift */; };
+		1A0000000000000000000A59 /* SessionFormView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A0000000000000000000A2C /* SessionFormView.swift */; };
+		1A0000000000000000000A5A /* TerminalPlaceholderView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A0000000000000000000A2D /* TerminalPlaceholderView.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -42,6 +48,12 @@
 		1A0000000000000000000A25 /* DreamSession.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DreamSession.swift; sourceTree = "<group>"; };
 		1A0000000000000000000A26 /* APIClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = APIClient.swift; sourceTree = "<group>"; };
 		1A0000000000000000000A27 /* KeychainTokenStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeychainTokenStore.swift; sourceTree = "<group>"; };
+		1A0000000000000000000A28 /* AppState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppState.swift; sourceTree = "<group>"; };
+		1A0000000000000000000A29 /* PairingView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PairingView.swift; sourceTree = "<group>"; };
+		1A0000000000000000000A2A /* ProfileListView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProfileListView.swift; sourceTree = "<group>"; };
+		1A0000000000000000000A2B /* SessionListView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionListView.swift; sourceTree = "<group>"; };
+		1A0000000000000000000A2C /* SessionFormView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionFormView.swift; sourceTree = "<group>"; };
+		1A0000000000000000000A2D /* TerminalPlaceholderView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TerminalPlaceholderView.swift; sourceTree = "<group>"; };
 		1A0000000000000000000A30 /* APIClientTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = APIClientTests.swift; sourceTree = "<group>"; };
 		1A0000000000000000000A31 /* DreamSessionDecodingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DreamSessionDecodingTests.swift; sourceTree = "<group>"; };
 		1A0000000000000000000A32 /* PairingURLParserTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PairingURLParserTests.swift; sourceTree = "<group>"; };
@@ -90,6 +102,12 @@
 				1A0000000000000000000A27 /* KeychainTokenStore.swift */,
 				1A0000000000000000000A25 /* DreamSession.swift */,
 				1A0000000000000000000A26 /* APIClient.swift */,
+				1A0000000000000000000A28 /* AppState.swift */,
+				1A0000000000000000000A29 /* PairingView.swift */,
+				1A0000000000000000000A2A /* ProfileListView.swift */,
+				1A0000000000000000000A2B /* SessionListView.swift */,
+				1A0000000000000000000A2C /* SessionFormView.swift */,
+				1A0000000000000000000A2D /* TerminalPlaceholderView.swift */,
 			);
 			path = Dream;
 			sourceTree = "<group>";
@@ -227,6 +245,12 @@
 				1A0000000000000000000A47 /* KeychainTokenStore.swift in Sources */,
 				1A0000000000000000000A45 /* DreamSession.swift in Sources */,
 				1A0000000000000000000A46 /* APIClient.swift in Sources */,
+				1A0000000000000000000A55 /* AppState.swift in Sources */,
+				1A0000000000000000000A56 /* PairingView.swift in Sources */,
+				1A0000000000000000000A57 /* ProfileListView.swift in Sources */,
+				1A0000000000000000000A58 /* SessionListView.swift in Sources */,
+				1A0000000000000000000A59 /* SessionFormView.swift in Sources */,
+				1A0000000000000000000A5A /* TerminalPlaceholderView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
