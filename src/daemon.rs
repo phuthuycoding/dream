@@ -89,8 +89,24 @@ fn systemctl(args: &[&str]) -> anyhow::Result<()> {
     Ok(())
 }
 
+#[cfg(test)]
 fn systemd_unit(program_args: &[String], exe_sha: &str) -> anyhow::Result<String> {
-    for a in program_args {
+    systemd_unit_with_env(program_args, &[], exe_sha)
+}
+
+/// Same, plus one `Environment=` line per (name, value) pair — how the
+/// oauth config reaches the service. A `--github-client-secret` ExecStart
+/// arg would sit in `ps` output instead.
+fn systemd_unit_with_env(
+    program_args: &[String],
+    env: &[(String, String)],
+    exe_sha: &str,
+) -> anyhow::Result<String> {
+    for a in program_args
+        .iter()
+        .map(String::as_str)
+        .chain(env.iter().flat_map(|(k, v)| [k.as_str(), v.as_str()]))
+    {
         if a.chars().any(|c| c.is_control()) {
             return Err(anyhow!("argument contains a control character — refusing to write the unit"));
         }
@@ -103,10 +119,20 @@ fn systemd_unit(program_args: &[String], exe_sha: &str) -> anyhow::Result<String
         .collect::<Vec<_>>()
         .join(" ");
     let svc_path = format!("{SERVICE_PATH}:%h/.local/bin");
+    let mut env_lines = format!("Environment=PATH={svc_path}\n");
+    for (name, value) in env {
+        // Unlike Exec lines, Environment= expands % specifiers (%% escapes)
+        // and C-style escapes inside quotes, but leaves $ literal.
+        let v = value
+            .replace('\\', "\\\\")
+            .replace('"', "\\\"")
+            .replace('%', "%%");
+        env_lines.push_str(&format!("Environment=\"{name}={v}\"\n"));
+    }
     Ok(format!(
         "# dream-exe-sha256: {exe_sha}\n\
          [Unit]\nDescription=dream web terminal daemon\nAfter=network-online.target\n\n\
-         [Service]\nEnvironment=PATH={svc_path}\nExecStart={exec}\nRestart=always\nRestartSec=3\n\n\
+         [Service]\n{env_lines}ExecStart={exec}\nRestart=always\nRestartSec=3\n\n\
          [Install]\nWantedBy=default.target\n"
     ))
 }
@@ -146,12 +172,34 @@ fn service_path_expanded() -> String {
     }
 }
 
+#[cfg(test)]
 fn plist_xml(program_args: &[String], log_out: &str, log_err: &str, exe_sha: &str) -> String {
+    plist_xml_with_env(program_args, log_out, log_err, exe_sha, &[])
+}
+
+/// Same, plus EnvironmentVariables entries for each (name, value) pair —
+/// the launchd twin of the systemd env lines, keeping the oauth secret
+/// out of `ps`.
+fn plist_xml_with_env(
+    program_args: &[String],
+    log_out: &str,
+    log_err: &str,
+    exe_sha: &str,
+    env: &[(String, String)],
+) -> String {
     let args: String = program_args
         .iter()
         .map(|a| format!("    <string>{}</string>", xml_escape(a)))
         .collect::<Vec<_>>()
         .join("\n");
+    let mut env_entries = String::new();
+    for (name, value) in env {
+        env_entries.push_str(&format!(
+            "    <key>{}</key>\n    <string>{}</string>\n",
+            xml_escape(name),
+            xml_escape(value)
+        ));
+    }
     format!(
         r#"<!-- dream-exe-sha256: {exe_sha} -->
 <?xml version="1.0" encoding="UTF-8"?>
@@ -176,7 +224,7 @@ fn plist_xml(program_args: &[String], log_out: &str, log_err: &str, exe_sha: &st
   <dict>
     <key>PATH</key>
     <string>{svc_path}</string>
-  </dict>
+{env_entries}  </dict>
 </dict>
 </plist>
 "#,
@@ -335,6 +383,25 @@ pub fn up(cli: &Cli) -> anyhow::Result<()> {
         args.push(age.as_secs().to_string());
     }
 
+    // The resolved oauth config (flags or env — Config already merged
+    // them) travels to the service as unit environment; putting the
+    // client secret in the arg list would expose it via `ps`.
+    let mut service_env: Vec<(String, String)> = Vec::new();
+    if let Some(oauth) = &cfg.github_oauth {
+        for (name, value) in [
+            ("DREAM_GITHUB_CLIENT_ID", &oauth.client_id),
+            ("DREAM_GITHUB_CLIENT_SECRET", &oauth.client_secret),
+            ("DREAM_GITHUB_ALLOWLIST", &oauth.allowlist.join(",")),
+        ] {
+            if value.chars().any(|c| c.is_control()) {
+                return Err(anyhow!(
+                    "{name} contains a control character — refusing to write the unit"
+                ));
+            }
+            service_env.push((name.to_string(), value.clone()));
+        }
+    }
+
     match platform {
         Platform::Macos => {
             let logs = log_dir()?;
@@ -348,7 +415,7 @@ pub fn up(cli: &Cli) -> anyhow::Result<()> {
             fs::create_dir_all(plist_path()?.parent().unwrap())?;
             let plist = plist_path()?;
             let exe_sha = file_sha256(&args[0]).unwrap_or_default();
-            let new_xml = plist_xml(&args, &logs.join("out.log").display().to_string(), &logs.join("err.log").display().to_string(), &exe_sha);
+            let new_xml = plist_xml_with_env(&args, &logs.join("out.log").display().to_string(), &logs.join("err.log").display().to_string(), &exe_sha, &service_env);
             // `up` is a daily command — when the unit text did not change,
             // leave a healthy running agent alone instead of killing its ptys.
             let already = fs::read_to_string(&plist).map(|c| c == new_xml).unwrap_or(false)
@@ -367,7 +434,7 @@ pub fn up(cli: &Cli) -> anyhow::Result<()> {
         Platform::Linux => {
             let unit = systemd_unit_path()?;
             let exe_sha = file_sha256(&args[0]).unwrap_or_default();
-            let new_unit = systemd_unit(&args, &exe_sha)?;
+            let new_unit = systemd_unit_with_env(&args, &service_env, &exe_sha)?;
             let already = fs::read_to_string(&unit).map(|c| c == new_unit).unwrap_or(false)
                 && unit_matches_binary(&new_unit, &args[0]);
             if already && service_active(Platform::Linux) {
@@ -846,6 +913,43 @@ mod tests {
         // Real control characters are rejected outright.
         assert!(systemd_unit(&["/b".into(), "a\u{0007}b".into()], "sha").is_err());
         assert!(systemd_unit(&["/b".into(), "a\u{000a}b".into()], "sha").is_err());
+    }
+
+    #[test]
+    fn systemd_unit_forwards_oauth_env_not_args() {
+        let env = vec![
+            ("DREAM_GITHUB_CLIENT_ID".to_string(), "id-1".to_string()),
+            ("DREAM_GITHUB_CLIENT_SECRET".to_string(), "s3cret".to_string()),
+            ("DREAM_GITHUB_ALLOWLIST".to_string(), "alice,org:acme".to_string()),
+        ];
+        let u = systemd_unit_with_env(&["/b".into()], &env, "sha").unwrap();
+        assert!(u.contains("Environment=\"DREAM_GITHUB_CLIENT_ID=id-1\""));
+        assert!(u.contains("Environment=\"DREAM_GITHUB_CLIENT_SECRET=s3cret\""));
+        assert!(u.contains("Environment=\"DREAM_GITHUB_ALLOWLIST=alice,org:acme\""));
+        // The secret rides the environment — an ExecStart arg would be
+        // visible in `ps`.
+        assert!(!u.lines().any(|l| l.starts_with("ExecStart=") && l.contains("s3cret")));
+        // % and " inside env values are escaped for the unit parser.
+        let env2 = vec![("DREAM_GITHUB_CLIENT_SECRET".to_string(), "a%b\"c".to_string())];
+        let u2 = systemd_unit_with_env(&["/b".into()], &env2, "sha").unwrap();
+        assert!(u2.contains("Environment=\"DREAM_GITHUB_CLIENT_SECRET=a%%b\\\"c\""));
+        // Control chars in env values are rejected like args are.
+        let env3 = vec![("DREAM_GITHUB_CLIENT_SECRET".to_string(), "a\nb".to_string())];
+        assert!(systemd_unit_with_env(&["/b".into()], &env3, "sha").is_err());
+    }
+
+    #[test]
+    fn plist_forwards_oauth_env_vars() {
+        let env = vec![
+            ("DREAM_GITHUB_CLIENT_SECRET".to_string(), "s3&cret".to_string()),
+            ("DREAM_GITHUB_ALLOWLIST".to_string(), "alice,org:acme".to_string()),
+        ];
+        let xml = plist_xml_with_env(&["/b".into()], "/o", "/e", "sha", &env);
+        assert!(xml.contains("<key>DREAM_GITHUB_CLIENT_SECRET</key>"));
+        assert!(xml.contains("<string>s3&amp;cret</string>"));
+        assert!(xml.contains("<key>DREAM_GITHUB_ALLOWLIST</key>"));
+        assert!(xml.contains("<string>alice,org:acme</string>"));
+        assert!(!xml.contains("--github-client-secret"));
     }
 
     #[test]

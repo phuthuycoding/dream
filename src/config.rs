@@ -1,3 +1,4 @@
+use std::fmt;
 use std::net::IpAddr;
 use std::path::PathBuf;
 use std::time::Duration;
@@ -22,7 +23,7 @@ pub struct Config {
 /// GitHub OAuth app credentials plus the allowlist of who may log in.
 /// Present only when the operator configures oauth — without it the bearer
 /// token stays the only gate.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 #[allow(dead_code)] // consumed by the auth layer (oauth flow, session minting)
 pub struct GithubOauth {
     pub client_id: String,
@@ -30,6 +31,18 @@ pub struct GithubOauth {
     /// Entries are bare logins or `org:name`, split from the
     /// comma-separated flag/env value.
     pub allowlist: Vec<String>,
+}
+
+// Manual Debug so a `{:?}` on Config cannot leak the client secret —
+// mirrors the redaction in auth::oauth::GithubOauth.
+impl fmt::Debug for GithubOauth {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("GithubOauth")
+            .field("client_id", &self.client_id)
+            .field("client_secret", &"<redacted>")
+            .field("allowlist", &self.allowlist)
+            .finish()
+    }
 }
 
 impl Config {
@@ -92,13 +105,15 @@ pub fn default_data_dir() -> PathBuf {
 }
 
 /// Resolves the GitHub OAuth flags and their DREAM_GITHUB_* env fallbacks —
-/// a flag beats the env var and an empty env value counts as unset, the same
-/// convention as DREAM_AUTH_TOKEN. Any oauth value turns the feature on, so
-/// credentials without a usable allowlist (which would lock everyone out or
-/// let everyone in) and half-given credentials are config errors.
+/// a flag beats the env var and an empty value counts as unset on both
+/// sides, the same convention as DREAM_AUTH_TOKEN. Any oauth value turns
+/// the feature on, so credentials without a usable allowlist (which would
+/// lock everyone out or let everyone in) and half-given credentials are
+/// config errors.
 fn resolve_github_oauth(cli: &Cli) -> anyhow::Result<Option<GithubOauth>> {
     fn flag_or_env(flag: &Option<String>, env: &str) -> Option<String> {
         flag.clone()
+            .filter(|v| !v.is_empty())
             .or_else(|| std::env::var(env).ok().filter(|v| !v.is_empty()))
     }
     let client_id = flag_or_env(&cli.github_client_id, "DREAM_GITHUB_CLIENT_ID");
@@ -120,6 +135,17 @@ fn resolve_github_oauth(cli: &Cli) -> anyhow::Result<Option<GithubOauth>> {
             "github oauth is configured but the allowlist is empty — \
              set --github-allowlist or DREAM_GITHUB_ALLOWLIST"
         );
+    }
+    // An `org:` entry with no name silently matches nobody — reject it
+    // like an empty allowlist, naming the offending entry. The prefix is
+    // matched case-insensitively (`ORG:` stays stored verbatim but its
+    // name must be non-empty too).
+    for entry in &allowlist {
+        if let Some((prefix, name)) = entry.split_once(':') {
+            if prefix.eq_ignore_ascii_case("org") && name.is_empty() {
+                bail!("github oauth allowlist entry {entry:?} has an empty org name");
+            }
+        }
     }
     match (client_id, client_secret) {
         (Some(client_id), Some(client_secret)) => Ok(Some(GithubOauth {
@@ -369,5 +395,57 @@ mod tests {
             cfg.github_oauth.is_none(),
             "empty-string env vars must not count as configured oauth"
         );
+    }
+
+    #[test]
+    fn github_oauth_client_id_without_secret_refuses_to_start() {
+        let (_lock, _env) = clean_github_env();
+        let data = TempDir::new().expect("tempdir");
+
+        // Half a credential pair must fail loudly — otherwise the daemon
+        // would start with oauth half-wired.
+        let result = load_with(
+            &[
+                "--github-client-id",
+                "client-123",
+                "--github-allowlist",
+                "alice",
+            ],
+            data.path(),
+        );
+
+        let err = result.expect_err("client id without a secret must be a config error");
+        assert!(
+            err.to_string().contains("client-secret"),
+            "the error must name the missing secret, got: {err}"
+        );
+    }
+
+    #[test]
+    fn github_oauth_org_entry_with_empty_name_refuses_to_start() {
+        let (_lock, _env) = clean_github_env();
+        let data = TempDir::new().expect("tempdir");
+
+        // `org:` with no name silently matches nobody — fail loudly and
+        // name the offending entry. The check is case-insensitive.
+        for (allowlist, entry) in [("org:", "org:"), ("alice,ORG:", "ORG:")] {
+            let result = load_with(
+                &[
+                    "--github-client-id",
+                    "client-123",
+                    "--github-client-secret",
+                    "secret-xyz",
+                    "--github-allowlist",
+                    allowlist,
+                ],
+                data.path(),
+            );
+
+            let err = result.expect_err("an empty org name must be a config error");
+            assert!(
+                err.to_string().contains(entry),
+                "the error must name the offending entry {entry:?}, got: {err}"
+            );
+        }
     }
 }
