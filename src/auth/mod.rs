@@ -502,12 +502,12 @@ mod tests {
             Some("state-token-abc"),
             "the CSRF token must round-trip to github verbatim"
         );
-        let scope = get("scope").unwrap_or_else(|| {
-            panic!("authorize url {url:?} must carry a scope — org entries need read:org")
-        });
+        // `test_oauth()`'s allowlist has no `org:` entry, so the flow
+        // never calls `/user/orgs` and `read:org` must not be requested.
+        let scope = get("scope").unwrap_or_default();
         assert!(
-            scope.split([' ', ',']).any(|s| s == "read:org"),
-            "scope must include read:org so org memberships can be listed, got {scope:?}"
+            !scope.split([' ', ',']).any(|s| s == "read:org"),
+            "scope must omit read:org without org: entries in the allowlist, got {scope:?}"
         );
     }
 

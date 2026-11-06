@@ -142,16 +142,18 @@ pub fn default_data_dir() -> PathBuf {
 }
 
 /// Resolves the GitHub OAuth flags and their DREAM_GITHUB_* env fallbacks —
-/// a flag beats the env var and an empty value counts as unset on both
-/// sides, the same convention as DREAM_AUTH_TOKEN. Any oauth value turns
+/// a flag beats the env var and an empty or whitespace-only value counts
+/// as unset on both sides, the same convention as DREAM_AUTH_TOKEN. Any
+/// oauth value turns
 /// the feature on, so credentials without a usable allowlist (which would
 /// lock everyone out or let everyone in) and half-given credentials are
 /// config errors.
 fn resolve_github_oauth(cli: &Cli) -> anyhow::Result<Option<GithubOauth>> {
     fn flag_or_env(flag: &Option<String>, env: &str) -> Option<String> {
         flag.clone()
-            .filter(|v| !v.is_empty())
-            .or_else(|| std::env::var(env).ok().filter(|v| !v.is_empty()))
+            .filter(|v| !v.trim().is_empty())
+            .or_else(|| std::env::var(env).ok().filter(|v| !v.trim().is_empty()))
+            .map(|v| v.trim().to_string())
     }
     let client_id = flag_or_env(&cli.github_client_id, "DREAM_GITHUB_CLIENT_ID");
     let client_secret = flag_or_env(&cli.github_client_secret, "DREAM_GITHUB_CLIENT_SECRET");

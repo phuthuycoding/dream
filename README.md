@@ -100,7 +100,7 @@ second way in, enabled by registering an OAuth App:
   half the credentials — is a startup error, so oauth can never come
   up half-wired.
 - The callback mints a signed `dream_session` cookie (`HttpOnly`,
-  `SameSite=Lax`, 7-day Max-Age) whose HMAC key persists at
+  `SameSite=Lax`, 30-day Max-Age) whose HMAC key persists at
   `<data-dir>/session-key` (mode `0600`) — logins survive a daemon
   restart. `POST /auth/logout` expires it.
 - **Secure cookies**: dream speaks cleartext HTTP itself, so

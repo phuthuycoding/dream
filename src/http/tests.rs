@@ -1108,3 +1108,57 @@ async fn logout_expires_the_session_cookie_without_requiring_auth() {
         "a logged-out client has no credential left to send"
     );
 }
+
+#[tokio::test]
+async fn cookies_minted_over_plain_http_do_not_carry_the_secure_attribute() {
+    let stub = spawn_github_stub("alice", vec![]).await;
+    let data = TempDir::new().expect("tempdir");
+    let base = spawn_oauth_server(data.path(), stub_oauth(&stub, &["alice"])).await;
+    let client = no_redirect_client();
+
+    // No X-Forwarded-Proto → the daemon speaks cleartext http and a
+    // `Secure` mint would be dropped by the browser outright (Safari
+    // drops it even on localhost → a login loop), so no cookie minted or
+    // cleared on this path may carry the attribute.
+    let resp = client
+        .get(format!("{base}/auth/github"))
+        .send()
+        .await
+        .expect("login start request");
+    assert_eq!(resp.status(), StatusCode::FOUND);
+    let state_cookie = set_cookies_named(&resp, "dream_oauth_state")
+        .into_iter()
+        .next()
+        .expect("login start must Set-Cookie the oauth state");
+    assert!(
+        !state_cookie.to_ascii_lowercase().contains("secure"),
+        "a plain-http login must not mint a Secure state cookie, got {state_cookie:?}"
+    );
+    let state = cookie_value(&state_cookie).to_string();
+
+    let resp = client
+        .get(format!("{base}/auth/callback?code=stub-code&state={state}"))
+        .header("cookie", format!("dream_oauth_state={state}"))
+        .send()
+        .await
+        .expect("callback request");
+    assert_eq!(
+        resp.status(),
+        StatusCode::FOUND,
+        "a successful plain-http login callback must 302"
+    );
+    let session = set_cookies_named(&resp, "dream_session")
+        .into_iter()
+        .next()
+        .expect("a successful login must Set-Cookie dream_session");
+    assert!(
+        !session.to_ascii_lowercase().contains("secure"),
+        "a plain-http login must not mint a Secure session cookie, got {session:?}"
+    );
+    for cleared in set_cookies_named(&resp, "dream_oauth_state") {
+        assert!(
+            !cleared.to_ascii_lowercase().contains("secure"),
+            "the clear must match the mint's attributes or it is dropped, got {cleared:?}"
+        );
+    }
+}

@@ -65,7 +65,10 @@ async function request(path, { method = 'GET', body } = {}) {
   const resp = await fetch(path, {
     method,
     headers: {
-      Authorization: `Bearer ${token}`,
+      // A cookie-only session holds no token — `Bearer ` with an empty
+      // value is a malformed credential, so the header goes out only
+      // when a token exists.
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
       ...(body !== undefined ? { 'Content-Type': 'application/json' } : {}),
     },
     body: body !== undefined ? JSON.stringify(body) : undefined,
@@ -129,8 +132,11 @@ export const api = {
 
 export function wsUrl(sessionId) {
   const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-  const token = encodeURIComponent(getToken());
-  return `${proto}//${window.location.host}/api/sessions/${sessionId}/ws?token=${token}`;
+  const url = `${proto}//${window.location.host}/api/sessions/${sessionId}/ws`;
+  // `?token=` goes out only when a token exists — a cookie-only session
+  // must not send an empty credential on the wire.
+  const token = getToken();
+  return token ? `${url}?token=${encodeURIComponent(token)}` : url;
 }
 
 // Attention flags are per-session and persist across attaches so the

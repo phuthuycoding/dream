@@ -13,6 +13,7 @@
 //! defaults.
 
 use std::fmt;
+use std::sync::OnceLock;
 use std::time::Duration;
 
 use anyhow::Context;
@@ -64,11 +65,17 @@ impl From<crate::config::GithubOauth> for GithubOauth {
 }
 
 impl GithubOauth {
-    /// The URL `/auth/github` 302s to. `read:org` scope is required so
-    /// `/user/orgs` can answer `org:` allowlist entries.
+    /// The URL `/auth/github` 302s to. `read:org` scope is requested only
+    /// when the allowlist holds an `org:` entry — it exists solely to
+    /// serve the `/user/orgs` call, so login-only setups ask for nothing.
     pub fn build_authorize_url(&self, redirect_uri: &str, state: &str) -> String {
+        let scope = if self.needs_orgs() {
+            "&scope=read:org"
+        } else {
+            ""
+        };
         format!(
-            "{}?client_id={}&redirect_uri={}&state={}&scope=read:org",
+            "{}?client_id={}&redirect_uri={}&state={}{scope}",
             self.authorize_url,
             urlencoded(&self.client_id),
             urlencoded(redirect_uri),
@@ -76,10 +83,18 @@ impl GithubOauth {
         )
     }
 
+    /// True when the allowlist carries an `org:` entry — the only
+    /// consumer of `/user/orgs`, so it decides both the `read:org`
+    /// scope request and whether the callback fetches orgs at all.
+    pub fn needs_orgs(&self) -> bool {
+        self.allowlist
+            .iter()
+            .any(|entry| entry.starts_with("org:"))
+    }
+
     /// Exchange the callback `code` for an access token.
     pub async fn exchange_code(&self, code: &str, redirect_uri: &str) -> anyhow::Result<String> {
-        let response = self
-            .client()
+        let response = Self::client()?
             .post(&self.token_url)
             .header("accept", "application/json")
             .form(&[
@@ -98,7 +113,19 @@ impl GithubOauth {
             .json()
             .await
             .context("token endpoint did not return json")?;
-        Ok(body.access_token)
+        // GitHub answers a refused exchange with HTTP 200 and an error
+        // payload, not a status — the absent access_token is the error
+        // path and error_description is what an operator needs to see.
+        match body.access_token {
+            Some(token) => Ok(token),
+            None => Err(anyhow::anyhow!(
+                "{} refused the code exchange: {}",
+                self.token_url,
+                body.error_description
+                    .or(body.error)
+                    .unwrap_or_else(|| "missing access_token".to_string())
+            )),
+        }
     }
 
     /// The login of the user `access_token` authenticates (`GET /user`).
@@ -126,8 +153,7 @@ impl GithubOauth {
         url: &str,
         access_token: &str,
     ) -> anyhow::Result<T> {
-        let response = self
-            .client()
+        let response = Self::client()?
             .get(url)
             .header("authorization", format!("Bearer {access_token}"))
             .header("accept", "application/vnd.github+json")
@@ -143,20 +169,35 @@ impl GithubOauth {
             .with_context(|| format!("GET {url} did not return json"))
     }
 
-    fn client(&self) -> reqwest::Client {
-        // GitHub rejects API calls without a User-Agent; the 10 s total
-        // timeout keeps a wedged endpoint from hanging the callback.
-        reqwest::Client::builder()
+    /// One pooled client for the process — `GithubOauth`'s pub fields are
+    /// a test seam (tests build it by struct literal), so the client
+    /// cannot live on the struct, and a per-call builder would throw the
+    /// connection pool away each request. GitHub rejects API calls
+    /// without a User-Agent; the 10 s total timeout keeps a wedged
+    /// endpoint from hanging the callback, and a build failure surfaces
+    /// as a call error, not a panic.
+    fn client() -> anyhow::Result<&'static reqwest::Client> {
+        static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
+        if let Some(client) = CLIENT.get() {
+            return Ok(client);
+        }
+        let client = reqwest::Client::builder()
             .user_agent("dream")
             .timeout(Duration::from_secs(10))
             .build()
-            .expect("reqwest client builds with a static user agent")
+            .context("cannot build the github http client")?;
+        Ok(CLIENT.get_or_init(|| client))
     }
 }
 
+/// The token endpoint's payload — GitHub reports a refused exchange as
+/// HTTP 200 with `error`/`error_description` instead of a status, so
+/// `access_token` stays optional and the error text survives to the log.
 #[derive(Deserialize)]
 struct TokenResponse {
-    access_token: String,
+    access_token: Option<String>,
+    error: Option<String>,
+    error_description: Option<String>,
 }
 
 #[derive(Deserialize)]

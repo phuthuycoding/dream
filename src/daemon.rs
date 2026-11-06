@@ -4,7 +4,7 @@
 use std::fs;
 use std::io::Write;
 use std::net::{TcpStream, ToSocketAddrs};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
@@ -351,6 +351,35 @@ fn unit_matches_binary(unit_text: &str, exe: &str) -> bool {
         .unwrap_or(false)
 }
 
+/// Write a service unit file owner-only — the plist/unit can carry the
+/// oauth client secret in its env lines, so `0600` must apply at create
+/// (a `fs::write` + `chmod` pair leaves a world-readable window), and is
+/// forced again afterwards because `mode()` only applies on creation.
+/// Mirrors `write_key_file` in auth/session.rs.
+fn write_private_file(path: &Path, contents: &str) -> anyhow::Result<()> {
+    let mut options = fs::OpenOptions::new();
+    options.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let mut file = options
+        .open(path)
+        .with_context(|| format!("cannot write {}", path.display()))?;
+    file.write_all(contents.as_bytes())
+        .with_context(|| format!("cannot write {}", path.display()))?;
+    file.sync_all()
+        .with_context(|| format!("cannot fsync {}", path.display()))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(path, fs::Permissions::from_mode(0o600))
+            .with_context(|| format!("cannot restrict {}", path.display()))?;
+    }
+    Ok(())
+}
+
 /// `dream up` — install + bootstrap the agent; idempotent.
 pub fn up(cli: &Cli) -> anyhow::Result<()> {
     let platform = platform()?;
@@ -425,17 +454,9 @@ pub fn up(cli: &Cli) -> anyhow::Result<()> {
                 print_url(&cfg);
                 return Ok(());
             }
-            fs::write(&plist, &new_xml)
-                .with_context(|| format!("cannot write {}", plist.display()))?;
             // The plist can carry the oauth client secret in
-            // EnvironmentVariables — the default 0644 would leave it
-            // readable by every local user.
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::PermissionsExt;
-                fs::set_permissions(&plist, std::fs::Permissions::from_mode(0o600))
-                    .with_context(|| format!("cannot restrict {}", plist.display()))?;
-            }
+            // EnvironmentVariables — it must be owner-only from creation.
+            write_private_file(&plist, &new_xml)?;
             let svc = service()?;
             let _ = launchctl(&["bootout", &svc]);
             launchctl(&["bootstrap", &format!("gui/{}", uid()?), &plist.display().to_string()])?;
@@ -452,16 +473,9 @@ pub fn up(cli: &Cli) -> anyhow::Result<()> {
                 return Ok(());
             }
             fs::create_dir_all(unit.parent().unwrap())?;
-            fs::write(&unit, &new_unit)
-                .with_context(|| format!("cannot write {}", unit.display()))?;
             // Same lockdown as the plist: the unit's Environment= lines
             // can hold the oauth client secret.
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::PermissionsExt;
-                fs::set_permissions(&unit, std::fs::Permissions::from_mode(0o600))
-                    .with_context(|| format!("cannot restrict {}", unit.display()))?;
-            }
+            write_private_file(&unit, &new_unit)?;
             systemctl(&["daemon-reload"])?;
             let _ = systemctl(&["disable", "--now", "dream.service"]);
             systemctl(&["enable", "--now", "dream.service"])?;

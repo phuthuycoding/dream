@@ -298,8 +298,8 @@ async fn ws_attach(
 // ---------------------------------------------------------------
 
 /// How long a minted `dream_session` stays valid — the cookie's Max-Age
-/// and the signed expiry are set to the same window.
-const SESSION_TTL_SECS: u64 = 60 * 60 * 24 * 7;
+/// and the signed expiry are set to the same window (~30 days, FR-003).
+const SESSION_TTL_SECS: u64 = 60 * 60 * 24 * 30;
 
 /// `GET /auth/github` — start the login: mint a CSRF state, carry it in
 /// the `dream_oauth_state` cookie and on the authorize redirect so the
@@ -367,9 +367,25 @@ async fn github_login_callback(
         Ok(login) => login,
         Err(err) => return internal_with_clear(err, &clear_state),
     };
-    let orgs = match oauth.fetch_orgs(&access_token).await {
-        Ok(orgs) => orgs,
-        Err(err) => return internal_with_clear(err, &clear_state),
+    // `/user/orgs` serves only `org:` allowlist entries — a login-only
+    // allowlist skips the call (and the `read:org` scope that feeds it).
+    let orgs = if oauth.needs_orgs() {
+        match oauth.fetch_orgs(&access_token).await {
+            Ok(orgs) => {
+                // An empty list while org: entries exist can only end in
+                // 403 — surface that instead of denying silently.
+                if orgs.is_empty() {
+                    tracing::warn!(
+                        "github allowlist has org: entries but /user/orgs \
+                         returned none — org members will be denied"
+                    );
+                }
+                orgs
+            }
+            Err(err) => return internal_with_clear(err, &clear_state),
+        }
+    } else {
+        Vec::new()
     };
     if !oauth::is_allowlisted(&oauth.allowlist, &login, &orgs) {
         return reject(StatusCode::FORBIDDEN);
