@@ -40,7 +40,7 @@ The dashboard is a bare card grid under a utilitarian toolbar: no brand presence
 - `web/dashboard.js` — home view render: session rows with created-time, guided empty state, quick actions
 - `web/terminal.js`, `web/app.js` — session tab strip, per-tab multi-attach lifecycle, persisted open tabs
 - `e2e/` — new ui-v2 playwright spec; the existing 14 tests must pass unchanged
-- `README.md`, `docs/requirement/app/web-terminal.md` — UI description updated for the home view and session tabs
+- `README.md`, `docs/requirement/app/dream.md` — UI description updated for the home view and session tabs
 
 ## Actors
 - Owner (single user driving the daemon from desktop and mobile browsers)

@@ -131,7 +131,7 @@ fn systemd_unit_with_env(
     }
     Ok(format!(
         "# dream-exe-sha256: {exe_sha}\n\
-         [Unit]\nDescription=dream web terminal daemon\nAfter=network-online.target\n\n\
+         [Unit]\nDescription=dream daemon\nAfter=network-online.target\n\n\
          [Service]\n{env_lines}ExecStart={exec}\nRestart=always\nRestartSec=3\n\n\
          [Install]\nWantedBy=default.target\n"
     ))

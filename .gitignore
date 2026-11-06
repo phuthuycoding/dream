@@ -5,3 +5,5 @@ node_modules/
 /e2e/test-results
 .DS_Store
 *.log
+# kanban-flow
+.worktrees/
