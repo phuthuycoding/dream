@@ -20,11 +20,25 @@ final class AttentionCenter: NSObject {
     /// suppressed: the attach already acknowledged the flag.
     @ObservationIgnored var foregroundedSessionID: String?
 
+    /// The profile whose daemon the edge detector listens to — the
+    /// session list sets it when it becomes the active browser.
+    /// Switching it re-primes the baseline so the new daemon's
+    /// pre-existing flags do not fire as stale edges, and a refresh
+    /// that resolves after the switch is ignored rather than diffed
+    /// against the other daemon's baseline.
+    @ObservationIgnored var activeProfileID: UUID? {
+        didSet {
+            guard activeProfileID != oldValue else { return }
+            flagged.removeAll()
+            primed = false
+        }
+    }
+
     /// Session ids the last observation reported as flagged — the edge
     /// detector's baseline. Not render state.
     @ObservationIgnored private var flagged: Set<String> = []
-    /// The first observation only seeds `flagged` — a flag already set
-    /// when the app opened is not a fresh edge.
+    /// The first observation of a profile only seeds `flagged` — a flag
+    /// already set when observation started is not a fresh edge.
     @ObservationIgnored private var primed = false
 
     override init() {
@@ -43,7 +57,10 @@ final class AttentionCenter: NSObject {
     /// Diff one session-list snapshot against the previous one: rising
     /// attention edges notify (except the foregrounded terminal's),
     /// cleared flags retract their pending and delivered banners.
-    func observe(_ sessions: [DreamSession]) {
+    /// Snapshots belonging to another profile — a poll issued before a
+    /// profile switch that resolved after it — are dropped.
+    func observe(_ sessions: [DreamSession], for profileID: UUID) {
+        guard profileID == activeProfileID else { return }
         let now = Set(sessions.filter(\.attention).map(\.id))
         defer { flagged = now }
         guard primed else {

@@ -41,6 +41,10 @@ struct SessionListView: View {
                     drainRequest()
                 }
                 .task(id: scenePhase) {
+                    // Claims the edge detector for this profile before
+                    // any refresh feeds it — a rebuilt list on profile
+                    // switch re-primes the baseline.
+                    attentionCenter.activeProfileID = profile.id
                     guard scenePhase == .active else { return }
                     await refresh()
                     while !Task.isCancelled {
@@ -181,7 +185,7 @@ struct SessionListView: View {
             sessions = try await client.listSessions()
             // Feed the attention edge detector before anything drains a
             // deep-link so the row snapshot it routes against is fresh.
-            attentionCenter.observe(sessions)
+            attentionCenter.observe(sessions, for: profile.id)
             banner = nil
         } catch APIError.unauthorized {
             appState.handleUnauthorized(profileId: profile.id)
