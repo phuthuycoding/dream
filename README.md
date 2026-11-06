@@ -58,9 +58,66 @@ address *and* holds the token gets a shell on your machine.
   generated/persisted one.
 - The static dashboard shell is served without auth (it contains no
   secrets — browsers cannot attach `Bearer` to `<script src>`/`<link>`
-  fetches). Every **API** request must carry the token: `Authorization: Bearer <token>` for
-  API calls; `?token=` is also accepted on the WebSocket upgrade and on
-  non-API GETs so a pasted share-link URL bootstraps index.html.
+  fetches). Every **API** request must carry a credential: `Authorization: Bearer <token>`,
+  a signed `dream_session` cookie (see GitHub OAuth below), or
+  `?token=` on the WebSocket upgrade — a pasted share-link URL
+  (`/?token=<token>`) boots the public shell, which picks the token up
+  for its API calls.
+
+## GitHub OAuth sign-in (optional)
+
+The bearer token always stays valid — GitHub login is an optional
+second way in, enabled by registering an OAuth App:
+
+1. GitHub → Settings → Developer settings → OAuth Apps → **New OAuth
+   App**. Set the **Authorization callback URL** to
+   `<base>/auth/callback` — the scheme + host the browser opens the
+   dashboard on, e.g. `http://127.0.0.1:4020/auth/callback` locally or
+   `https://<machine>.<tailnet>.ts.net/auth/callback` behind
+   `tailscale serve`. (dream rebuilds the callback per request from the
+   `Host` header and `X-Forwarded-Proto`; the registered URL just has
+   to match what the browser uses.)
+2. Start dream with the three values:
+
+   ```sh
+   dream --github-client-id <ID> \
+         --github-client-secret <SECRET> \
+         --github-allowlist <LOGIN[,LOGIN|org:ORG...]>
+   ```
+
+   `DREAM_GITHUB_CLIENT_ID`, `DREAM_GITHUB_CLIENT_SECRET` and
+   `DREAM_GITHUB_ALLOWLIST` fill in when a flag is absent — prefer the
+   env var for the secret (a flag value shows in `ps`). A flag beats
+   its env var; an empty value counts as unset.
+
+- **Allowlist grammar**: comma-separated entries. A bare `login`
+  admits that GitHub user (case-insensitive); `org:name` admits any
+  member of that org (membership checked against the user's
+  first 100 orgs from /user/orgs). `org:` entries are why the authorize request
+  carries the `read:org` scope — the callback lists `/user/orgs` to
+  check membership. A user who matches no entry gets `403`.
+  Configuring any oauth value without a usable allowlist — or only
+  half the credentials — is a startup error, so oauth can never come
+  up half-wired.
+- The callback mints a signed `dream_session` cookie (`HttpOnly`,
+  `SameSite=Lax`, 30-day Max-Age) whose HMAC key persists at
+  `<data-dir>/session-key` (mode `0600`) — logins survive a daemon
+  restart. `POST /auth/logout` expires it.
+- **Secure cookies**: dream speaks cleartext HTTP itself, so
+  `dream_session` is marked `Secure` only when the request arrives
+  behind an HTTPS front that sets `X-Forwarded-Proto: https`
+  (`tailscale serve` does). Minting `Secure` on plain http would make
+  browsers drop the cookie — a login loop.
+- **`dream up`**: the resolved config (flags or env — same merge)
+  travels to the service as unit environment
+  (`Environment=`/`EnvironmentVariables`, never args — that would
+  expose the secret via `ps`). Pass the flags or set the
+  `DREAM_GITHUB_*` vars on the `dream up` invocation and the installed
+  service picks them up.
+- **Token fallback**: nothing about the bearer path changes —
+  `Authorization: Bearer` on API calls and `?token=` on the WebSocket
+  attach still work, and the gate shows the token form next to the
+  "Sign in with GitHub" button.
 
 ## Data-dir layout
 
@@ -147,6 +204,9 @@ Certificates).
 | `--bind <ADDR>` | `127.0.0.1` | Bind address; non-loopback requires `--public` |
 | `--data-dir <DIR>` | platform data dir | Session state + token location |
 | `--auth-token <T>` | generated | Override the bearer token |
+| `--github-client-id <ID>` | unset | GitHub OAuth App client id — enables GitHub login (`DREAM_GITHUB_CLIENT_ID`) |
+| `--github-client-secret <S>` | unset | GitHub OAuth App client secret (`DREAM_GITHUB_CLIENT_SECRET`) |
+| `--github-allowlist <LIST>` | unset | Comma-separated logins / `org:name` allowed in (`DREAM_GITHUB_ALLOWLIST`) |
 | `--public` | off | Allow non-loopback bind (prints a security warning) |
 | `--log-cap <BYTES>` | unset | Per-session replay log size cap |
 | `--log-max-age <SECONDS>` | unset | Max replay log age; older logs are reset |

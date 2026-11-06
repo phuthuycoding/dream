@@ -8,7 +8,7 @@ status: confirmed
 
 # Spec Requirement
 
-> **Partly superseded by `cli-lifecycle` and `ui-v2`.** The binary name is `dream`, and always-on across login is `dream up` (launchd on macOS, systemd --user on Linux), not an open question or a documented recipe only. The dashboard is a flat full-width session **list** (not a card grid) and the terminal view has a browser-style tab strip with keep-alive multi-attach (switching preserves screen state; at most 6 live xterm instances, LRU-evicted tabs re-attach on activation). Kept for history.
+> **Partly superseded by `cli-lifecycle`, `ui-v2` and `github-oauth`.** The binary name is `dream`, and always-on across login is `dream up` (launchd on macOS, systemd --user on Linux), not an open question or a documented recipe only. The dashboard is a flat full-width session **list** (not a card grid) and the terminal view has a browser-style tab strip with keep-alive multi-attach (switching preserves screen state; at most 6 live xterm instances, LRU-evicted tabs re-attach on activation). On auth (FR-007): the generated bearer token is unchanged, but an API request now satisfies the gate with any of — `Authorization: Bearer <token>`, a signed `dream_session` cookie minted by the optional GitHub OAuth login (`--github-client-id`/`--github-client-secret`/`--github-allowlist`), or `?token=` on the WebSocket attach route. Kept for history.
 
 ## Feature
 web-terminal

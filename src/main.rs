@@ -3,7 +3,7 @@ use std::time::Duration;
 
 use anyhow::Context;
 use dream::{
-    auth::AuthToken,
+    auth::{oauth::GithubOauth, AuthToken},
     cli::Cli,
     config::Config,
     http::routes::build_router_with,
@@ -82,7 +82,19 @@ async fn main() -> anyhow::Result<()> {
         println!("dream ready — token file at {}", cfg.data_dir.display());
     }
 
-    let app = build_router_with(manager, cfg.data_dir.clone(), auth.token);
+    // Operator-configured GitHub OAuth (flags/env) becomes the
+    // endpoint-complete client the routes run the login flow through.
+    let oauth = cfg
+        .github_oauth
+        .clone()
+        .map(|config| Arc::new(GithubOauth::from(config)));
+    let app = build_router_with(
+        manager,
+        cfg.data_dir.clone(),
+        auth.token,
+        oauth,
+        addr.clone(),
+    )?;
     let listener = tokio::net::TcpListener::bind(&addr)
         .await
         .with_context(|| format!("cannot bind {addr} — port already in use?"))?;

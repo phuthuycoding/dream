@@ -429,6 +429,12 @@ async fn spawn(
     cmd.env_remove("DREAM_AUTH_TOKEN");
     // Pre-rename deployments may still export the old name.
     cmd.env_remove("WEBTERM_AUTH_TOKEN");
+    // The GitHub oauth config reaches the daemon via its environment
+    // (launchd EnvironmentVariables / systemd Environment=) — the client
+    // secret must not leak into a session's `env` output either.
+    cmd.env_remove("DREAM_GITHUB_CLIENT_ID");
+    cmd.env_remove("DREAM_GITHUB_CLIENT_SECRET");
+    cmd.env_remove("DREAM_GITHUB_ALLOWLIST");
     // The header advertises xterm-256color; without these a pty child
     // launched under a minimal environment (launchd, systemd) has no
     // TERM at all and full-screen apps degrade or refuse to run.

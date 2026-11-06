@@ -26,6 +26,22 @@ pub struct Cli {
     #[arg(long, global = true)]
     pub auth_token: Option<String>,
 
+    /// GitHub OAuth app client id — enables GitHub login next to the
+    /// bearer token. Requires --github-client-secret and --github-allowlist;
+    /// DREAM_GITHUB_CLIENT_ID fills in when the flag is absent
+    #[arg(long, global = true)]
+    pub github_client_id: Option<String>,
+
+    /// GitHub OAuth app client secret; prefer DREAM_GITHUB_CLIENT_SECRET —
+    /// a flag value is visible in the process list
+    #[arg(long, global = true)]
+    pub github_client_secret: Option<String>,
+
+    /// Comma-separated GitHub logins allowed in, or org:name to admit a
+    /// whole organisation; DREAM_GITHUB_ALLOWLIST fills in when absent
+    #[arg(long, global = true)]
+    pub github_allowlist: Option<String>,
+
     /// Allow binding a non-loopback interface (prints a security warning;
     /// traffic is cleartext)
     #[arg(long, global = true)]
@@ -108,5 +124,61 @@ mod tests {
         // No subcommand → run daemon.
         let cli = Cli::try_parse_from(["dream", "--port", "4030"]).unwrap();
         assert!(cli.action.is_none());
+    }
+
+    #[test]
+    fn github_oauth_flags_are_accepted() {
+        let parsed = Cli::try_parse_from([
+            "dream",
+            "--github-client-id",
+            "client-123",
+            "--github-client-secret",
+            "secret-xyz",
+            "--github-allowlist",
+            "alice,org:acme",
+        ]);
+        assert!(
+            parsed.is_ok(),
+            "the github oauth flags must parse: {}",
+            parsed.err().map(|e| e.to_string()).unwrap_or_default()
+        );
+    }
+
+    #[test]
+    fn github_oauth_flags_are_global_after_a_subcommand() {
+        // The daemon subcommands (up/restart) need the oauth flags just like
+        // --port and --data-dir.
+        let parsed = Cli::try_parse_from([
+            "dream",
+            "up",
+            "--github-client-id",
+            "client-123",
+            "--github-client-secret",
+            "secret-xyz",
+            "--github-allowlist",
+            "alice",
+        ]);
+        assert!(
+            parsed.is_ok(),
+            "oauth flags must be accepted after a subcommand: {}",
+            parsed.err().map(|e| e.to_string()).unwrap_or_default()
+        );
+    }
+
+    #[test]
+    fn github_oauth_flag_values_reach_the_cli() {
+        let cli = Cli::try_parse_from([
+            "dream",
+            "--github-client-id",
+            "client-123",
+            "--github-client-secret",
+            "secret-xyz",
+            "--github-allowlist",
+            "alice,org:acme",
+        ])
+        .expect("github oauth flags must parse");
+        assert_eq!(cli.github_client_id.as_deref(), Some("client-123"));
+        assert_eq!(cli.github_client_secret.as_deref(), Some("secret-xyz"));
+        assert_eq!(cli.github_allowlist.as_deref(), Some("alice,org:acme"));
     }
 }

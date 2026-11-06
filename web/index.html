@@ -46,6 +46,10 @@
       <section id="view-gate" class="view hidden">
         <form id="gate-form" class="card gate-card">
           <h1><img src="/icon.svg" alt="" width="28" height="28" />dream</h1>
+          <div id="gate-github" class="hidden">
+            <a id="btn-github" class="btn" href="/auth/github">Sign in with GitHub</a>
+            <p class="gate-divider">or paste a token</p>
+          </div>
           <p>Paste the access token (see the daemon's startup output).</p>
           <input id="gate-token" type="password" autocomplete="off" placeholder="token" required />
           <p id="gate-error" class="error hidden"></p>

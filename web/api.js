@@ -34,6 +34,20 @@ export function clearToken() {
   localStorage.removeItem(TOKEN_KEY);
 }
 
+// Auth epoch: every auth attempt (tryAuth/gateSubmit in app.js) bumps it
+// and request() stamps the epoch it started under onto the 401 event, so
+// a rejection from a superseded attempt cannot tear down the session a
+// newer attempt already established — the navGen pattern, for auth.
+let authEpoch = 0;
+
+export function bumpAuthEpoch() {
+  authEpoch += 1;
+}
+
+export function currentAuthEpoch() {
+  return authEpoch;
+}
+
 // Pull `?token=` out of the URL into localStorage and remove it from the
 // address bar so it is not copied into links or left in history.
 export function adoptTokenFromUrl() {
@@ -46,19 +60,27 @@ export function adoptTokenFromUrl() {
 }
 
 async function request(path, { method = 'GET', body } = {}) {
+  const token = getToken();
+  const epoch = authEpoch;
   const resp = await fetch(path, {
     method,
     headers: {
-      Authorization: `Bearer ${getToken()}`,
+      // A cookie-only session holds no token — `Bearer ` with an empty
+      // value is a malformed credential, so the header goes out only
+      // when a token exists.
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
       ...(body !== undefined ? { 'Content-Type': 'application/json' } : {}),
     },
     body: body !== undefined ? JSON.stringify(body) : undefined,
   });
   if (resp.status === 401) {
-    clearToken();
+    // Clear only the credential that was actually rejected — a token
+    // pasted meanwhile belongs to a newer attempt and must survive.
+    if (getToken() === token) clearToken();
     // Listeners (app.js) drop back to the auth gate no matter which
-    // code path — poll, click, attach — surfaced the rejection.
-    window.dispatchEvent(new CustomEvent('dream:unauthorized'));
+    // code path — poll, click, attach — surfaced the rejection, unless
+    // the epoch stamped here was superseded by a newer auth.
+    window.dispatchEvent(new CustomEvent('dream:unauthorized', { detail: { epoch } }));
     throw new AuthError('unauthorized — token rejected or missing');
   }
   if (!resp.ok) {
@@ -67,6 +89,29 @@ async function request(path, { method = 'GET', body } = {}) {
   }
   if (resp.status === 204) return null;
   return resp.json();
+}
+
+// `GET /auth/mode` → {github: bool} — public probe telling the gate whether
+// the daemon was started with GitHub OAuth configured. Not routed through
+// `request()`: it needs no Authorization header and must not trip the 401
+// gate-clearing path.
+export async function oauthMode() {
+  const resp = await fetch('/auth/mode');
+  if (!resp.ok) {
+    throw new ApiError(resp.status, `GET /auth/mode → ${resp.status}`);
+  }
+  return resp.json();
+}
+
+// `POST /auth/logout` expires the `dream_session` cookie server-side; the
+// response is a 302 to `/`, so this is a raw fetch, not `request()`'s JSON
+// path. A non-2xx means the cookie survived — reject so the caller can
+// warn instead of letting the user believe the logout landed.
+export async function logout() {
+  const resp = await fetch('/auth/logout', { method: 'POST' });
+  if (!resp.ok) {
+    throw new ApiError(resp.status, `POST /auth/logout → ${resp.status}`);
+  }
 }
 
 export const api = {
@@ -87,8 +132,11 @@ export const api = {
 
 export function wsUrl(sessionId) {
   const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-  const token = encodeURIComponent(getToken());
-  return `${proto}//${window.location.host}/api/sessions/${sessionId}/ws?token=${token}`;
+  const url = `${proto}//${window.location.host}/api/sessions/${sessionId}/ws`;
+  // `?token=` goes out only when a token exists — a cookie-only session
+  // must not send an empty credential on the wire.
+  const token = getToken();
+  return token ? `${url}?token=${encodeURIComponent(token)}` : url;
 }
 
 // Attention flags are per-session and persist across attaches so the

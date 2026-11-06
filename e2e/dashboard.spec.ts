@@ -18,7 +18,10 @@ import {
 } from './helpers';
 
 test('TC-017: auth gate first, then dashboard lists sessions', async ({ context, daemon }) => {
-  await installAuthShim(context, daemon.token);
+  // No auth shim here: the static shell is public since BUG-E2E-001's
+  // is_static_get exemption, and the no-token probe must reach the
+  // middleware bare — an injected Bearer would mask the gate. With no
+  // credential at all the only outcome can be 401 → gate.
   const page = await context.newPage();
 
   // No token → gate, not the dashboard.
