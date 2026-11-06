@@ -42,5 +42,8 @@
       ]
     }
   },
-  "repository": "phuthuycoding/dream"
+  "repository": "phuthuycoding/dream",
+  "worktree": {
+    "enabled": true
+  }
 }
