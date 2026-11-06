@@ -81,3 +81,32 @@ impl Cli {
         cli
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn subcommand_parses() {
+        for args in [
+            vec!["dream", "up"],
+            vec!["dream", "down"],
+            vec!["dream", "status"],
+            vec!["dream", "restart"],
+            vec!["dream", "logs"],
+            vec!["dream", "logs", "-f"],
+            vec!["dream", "url"],
+            vec!["dream", "ps"],
+            vec!["dream", "doctor"],
+        ] {
+            let cli = Cli::try_parse_from(&args).unwrap_or_else(|e| panic!("{args:?}: {e}"));
+            assert!(cli.action.is_some(), "{args:?}");
+        }
+        // Global flags after the subcommand (dream up --port 4030).
+        let cli = Cli::try_parse_from(["dream", "up", "--port", "4030"]).unwrap();
+        assert_eq!(cli.port, 4030);
+        // No subcommand → run daemon.
+        let cli = Cli::try_parse_from(["dream", "--port", "4030"]).unwrap();
+        assert!(cli.action.is_none());
+    }
+}

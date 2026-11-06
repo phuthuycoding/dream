@@ -118,43 +118,7 @@ Certificates).
 
 ## Auto-start on macOS (launchd)
 
-`dream up` does this automatically — the manual recipe below is for advanced setups. Save as `~/Library/LaunchAgents/dev.dream.plist`, adjusting the binary
-and log paths (launchd does not expand `~` — use absolute paths):
-
-```xml
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
-  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-  <key>Label</key>
-  <string>dev.dream</string>
-  <key>ProgramArguments</key>
-  <array>
-    <string>/usr/local/bin/dream</string>
-    <string>--port</string>
-    <string>4020</string>
-  </array>
-  <key>RunAtLoad</key>
-  <true/>
-  <key>KeepAlive</key>
-  <true/>
-  <key>StandardOutPath</key>
-  <string>/Users/<you>/Library/Logs/dream.out.log</string>
-  <key>StandardErrorPath</key>
-  <string>/Users/<you>/Library/Logs/dream.err.log</string>
-</dict>
-</plist>
-```
-
-```sh
-launchctl load ~/Library/LaunchAgents/dev.dream.plist
-launchctl start dev.dream
-```
-
-dream prints the token URL once on first run to stdout, so keep these
-logs owner-private — `~/Library/Logs` is, a world-readable `/tmp` file is
-not.
+`dream up` does this automatically — recommended. Manual recipe for custom setups: the agent must be label `com.dream.daemon` for `dream down`/`status` to manage it; use `launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.dream.daemon.plist` (modern verbs — not `load`), with logs at `~/Library/Logs/dream/{out,err}.log`. Under launchd the token is never printed to the log — it lives in the 0600 token file (`<data-dir>/token`), printed once on a TTY first run or reprinted with `dream url`.
 
 ## CLI reference
 

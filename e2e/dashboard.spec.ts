@@ -44,8 +44,11 @@ test('TC-017: auth gate first, then dashboard lists sessions', async ({ context,
   const card = page.locator('.session-card', { hasText: 'dash-listed' });
   await expect(card).toBeVisible();
   await expect(card.locator('.badge')).toHaveText('live');
-  // FR-006: cards show the short id (first 8 chars); full id is in the title attr.
-  await expect(card.locator('.session-meta')).toContainText(s.id.slice(0, 8));
+  // Cards show the short id — exact 8 chars, with the full id in the
+  // title for copy (a full-UUID render must fail this).
+  const idCell = card.locator('.session-meta .meta-row', { hasText: s.id.slice(0, 8) }).locator('.mv');
+  await expect(idCell).toHaveText(s.id.slice(0, 8));
+  await expect(idCell).toHaveAttribute('title', new RegExp(s.id));
 });
 
 test('TC-022: kill, rename, delete through the UI; bell raises the attention badge', async ({
