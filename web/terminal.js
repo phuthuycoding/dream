@@ -1,5 +1,7 @@
-// terminal.js — xterm attach view: scrollback → snapshot → live stream,
-// input/resize relay, reconnect, mobile soft keys.
+// terminal.js — xterm attach view: browser-style session tabs with
+// keep-alive multi-attach. One xterm + WebSocket per open tab (lazy,
+// LRU-capped); switching toggles pane visibility — no replay, no lost
+// screen state.
 //
 // Wire protocol (src/ws/frame.rs): byte 0 is an ASCII opcode.
 //   client → server: `i` + raw stdin bytes; `r` + cols,rows as u16 BE
@@ -13,6 +15,12 @@
 // before the snapshot are buffered and written after the resize.
 // A dead session sends only `o` replay + `e` — no `s` — so pending
 // scrollback is flushed on `e` or socket close.
+//
+// Tab model (ui-v2 FR-002): `localStorage["dream.tabs"]` holds the open
+// tab list (order = strip order); `#/s/<id>` is the source of truth for
+// the *active* tab. At most MAX_LIVE terminal instances stay alive —
+// activating beyond the cap evicts the least-recently-used background
+// tab (its tab stays in the strip and re-attaches on next activation).
 
 import {
   api,
@@ -31,25 +39,27 @@ const OP_ATTENTION = 0x61; // 'a'
 
 const RECONNECT_MIN_MS = 500;
 const RECONNECT_MAX_MS = 8000;
+const MAX_LIVE = 6;
 
 const $ = (id) => document.getElementById(id);
 const encoder = new TextEncoder();
 const latin1 = new TextDecoder('latin1');
 const utf8 = new TextDecoder();
 
-let session = null;
-let term = null;
-let fitAddon = null;
-let socket = null;
-let scrollback = []; // `o` payloads buffered until the snapshot arrives
-let snapshotApplied = false;
-let ended = false;
-let userClosed = false;
-let reconnectTimer = null;
-let reconnectAttempt = 0;
-let appCursorMode = false; // DECCKM — tracked so soft arrows send SS3
-let ctrlArmed = false;
+// tabs: id -> {
+//   id, session, term, fitAddon, socket, pane,
+//   scrollback, snapshotApplied, ended, userClosed,
+//   reconnectTimer, reconnectAttempt, appCursorMode,
+// }
+const tabs = new Map();
+let liveOrder = []; // most-recently-used first — LRU bookkeeping
+let activeId = null;
 let resizeObserver = null;
+let ctrlArmed = false;
+
+function active() {
+  return activeId ? tabs.get(activeId) : null;
+}
 
 function setStatus(text, cls) {
   const pill = $('term-status');
@@ -58,31 +68,32 @@ function setStatus(text, cls) {
 }
 
 function setTitle(attention) {
-  const name = session ? session.name : 'terminal';
+  const inst = active();
+  const name = inst && inst.session ? inst.session.name : 'terminal';
   $('term-title').textContent = name;
   document.title = `${attention ? '● ' : ''}${name} — dream`;
 }
 
 // ---- wire encode/decode ----
 
-function sendFrame(opcode, payload) {
-  if (!socket || socket.readyState !== WebSocket.OPEN) return;
+function sendFrame(inst, opcode, payload) {
+  if (!inst.socket || inst.socket.readyState !== WebSocket.OPEN) return;
   const frame = new Uint8Array(1 + payload.length);
   frame[0] = opcode;
   frame.set(payload, 1);
-  socket.send(frame);
+  inst.socket.send(frame);
 }
 
-function sendInput(str) {
-  sendFrame(OP_INPUT, encoder.encode(str));
+function sendInput(inst, str) {
+  sendFrame(inst, OP_INPUT, encoder.encode(str));
 }
 
-function sendResize(cols, rows) {
+function sendResize(inst, cols, rows) {
   const payload = new Uint8Array(4);
   const view = new DataView(payload.buffer);
   view.setUint16(0, cols);
   view.setUint16(2, rows);
-  sendFrame(OP_RESIZE, payload);
+  sendFrame(inst, OP_RESIZE, payload);
 }
 
 // Snapshot geometry: `\x1bc` + `\x1b[8;<rows>;<cols>t` leads the stream.
@@ -98,7 +109,7 @@ function parseGeometry(payload) {
 // Track DECCKM application-cursor mode from the output stream so the
 // soft-key arrows emit the right sequence in TUIs. Byte scan (no string
 // allocation) for `\x1b[?1h` / `\x1b[?1l`; the last occurrence wins.
-function scanCursorMode(payload) {
+function scanCursorMode(inst, payload) {
   for (let i = payload.length - 5; i >= 0; i -= 1) {
     if (
       payload[i] === 0x1b &&
@@ -106,8 +117,8 @@ function scanCursorMode(payload) {
       payload[i + 2] === 0x3f && // '?'
       payload[i + 3] === 0x31 // '1'
     ) {
-      if (payload[i + 4] === 0x68) appCursorMode = true; // 'h'
-      else if (payload[i + 4] === 0x6c) appCursorMode = false; // 'l'
+      if (payload[i + 4] === 0x68) inst.appCursorMode = true; // 'h'
+      else if (payload[i + 4] === 0x6c) inst.appCursorMode = false; // 'l'
       return;
     }
   }
@@ -115,68 +126,72 @@ function scanCursorMode(payload) {
 
 // ---- frame handlers ----
 
-function handleOutput(payload) {
-  scanCursorMode(payload);
-  if (snapshotApplied) {
-    term.write(payload);
+function handleOutput(inst, payload) {
+  scanCursorMode(inst, payload);
+  if (inst.snapshotApplied) {
+    inst.term.write(payload);
   } else {
-    scrollback.push(payload);
+    inst.scrollback.push(payload);
   }
 }
 
-function flushScrollback() {
-  for (const chunk of scrollback) term.write(chunk);
-  scrollback = [];
+function flushScrollback(inst) {
+  for (const chunk of inst.scrollback) inst.term.write(chunk);
+  inst.scrollback = [];
 }
 
-function handleSnapshot(payload) {
+function handleSnapshot(inst, payload) {
   // The dump may carry DECCKM (\x1b[?1h/l); scan it like `o` frames do so
   // soft arrows are right after a fresh attach.
-  scanCursorMode(payload);
+  scanCursorMode(inst, payload);
   const geometry = parseGeometry(payload);
-  if (geometry && (term.cols !== geometry.cols || term.rows !== geometry.rows)) {
-    term.resize(geometry.cols, geometry.rows);
+  if (
+    geometry &&
+    (inst.term.cols !== geometry.cols || inst.term.rows !== geometry.rows)
+  ) {
+    inst.term.resize(geometry.cols, geometry.rows);
   }
-  flushScrollback();
-  term.write(payload);
-  snapshotApplied = true;
+  flushScrollback(inst);
+  inst.term.write(payload);
+  inst.snapshotApplied = true;
   // Adopt the container size next; if it differs from the emulator's the
   // server gets an `r` and reflows/repaints at the real browser size.
-  fitSoon();
+  if (inst.id === activeId) fitSoon(inst);
 }
 
-function handleEnd(payload) {
-  flushScrollback(); // dead attach: replay arrives without a snapshot
-  ended = true;
-  setStatus('ended', 'bad');
-  $('overlay-text').textContent =
-    utf8.decode(payload) || 'session ended';
-  $('term-overlay').classList.remove('hidden');
-  $('btn-term-respawn').classList.remove('hidden');
+function handleEnd(inst, payload) {
+  flushScrollback(inst); // dead attach: replay arrives without a snapshot
+  inst.ended = true;
+  if (inst.id === activeId) {
+    setStatus('ended', 'bad');
+    $('overlay-text').textContent =
+      utf8.decode(payload) || 'session ended';
+    $('term-overlay').classList.remove('hidden');
+    $('btn-term-respawn').classList.remove('hidden');
+  }
 }
 
-function handleAttention() {
-  if (!session) return;
-  setAttention(session.id);
-  setTitle(true);
+function handleAttention(inst) {
+  setAttention(inst.id);
+  if (inst.id === activeId) setTitle(true);
 }
 
-function onMessage(event) {
+function onMessage(inst, event) {
   if (!(event.data instanceof ArrayBuffer) || event.data.byteLength === 0) return;
   const frame = new Uint8Array(event.data);
   const payload = frame.subarray(1);
   switch (frame[0]) {
     case OP_OUTPUT:
-      handleOutput(payload);
+      handleOutput(inst, payload);
       break;
     case OP_SNAPSHOT:
-      handleSnapshot(payload);
+      handleSnapshot(inst, payload);
       break;
     case OP_END:
-      handleEnd(payload);
+      handleEnd(inst, payload);
       break;
     case OP_ATTENTION:
-      handleAttention();
+      handleAttention(inst);
       break;
     default:
       break; // unknown opcode — drop
@@ -185,70 +200,92 @@ function onMessage(event) {
 
 // ---- socket lifecycle ----
 
-function connect() {
-  clearTimeout(reconnectTimer);
-  userClosed = false; // unmount() disarms reconnect; every attach re-arms it
-  scrollback = [];
-  snapshotApplied = false;
-  ended = false;
-  socket = new WebSocket(wsUrl(session.id));
-  socket.binaryType = 'arraybuffer';
-  setStatus('connecting…', 'warn');
+function connect(inst) {
+  clearTimeout(inst.reconnectTimer);
+  inst.userClosed = false;
+  inst.scrollback = [];
+  inst.snapshotApplied = false;
+  inst.ended = false;
+  inst.socket = new WebSocket(wsUrl(inst.id));
+  inst.socket.binaryType = 'arraybuffer';
+  if (inst.id === activeId) setStatus('connecting…', 'warn');
 
-  socket.onopen = () => {
-    reconnectAttempt = 0;
+  inst.socket.onopen = () => {
+    inst.reconnectAttempt = 0;
     // A reconnect replays scrollback + snapshot; reset so the replay
     // does not duplicate history already on screen.
-    term.reset();
-    setStatus('connected', 'ok');
-    fitSoon();
+    inst.term.reset();
+    if (inst.id === activeId) setStatus('connected', 'ok');
+    if (inst.id === activeId) fitSoon(inst);
   };
-  socket.onmessage = onMessage;
-  socket.onclose = () => {
-    flushScrollback(); // never strand buffered replay bytes
-    if (userClosed || ended) return;
+  inst.socket.onmessage = (ev) => onMessage(inst, ev);
+  inst.socket.onclose = () => {
+    flushScrollback(inst); // never strand buffered replay bytes
+    if (inst.userClosed || inst.ended) return;
     const delay = Math.min(
-      RECONNECT_MIN_MS * 2 ** reconnectAttempt,
+      RECONNECT_MIN_MS * 2 ** inst.reconnectAttempt,
       RECONNECT_MAX_MS,
     );
-    reconnectAttempt += 1;
-    setStatus(`reconnecting in ${Math.round(delay / 100) / 10}s`, 'warn');
-    reconnectTimer = setTimeout(connect, delay);
+    inst.reconnectAttempt += 1;
+    if (inst.id === activeId) {
+      setStatus(`reconnecting in ${Math.round(delay / 100) / 10}s`, 'warn');
+    }
+    inst.reconnectTimer = setTimeout(() => connect(inst), delay);
   };
-  socket.onerror = () => {
+  inst.socket.onerror = () => {
     // onclose follows with the real teardown/reconnect decision.
   };
 }
 
-async function respawnAndReattach() {
+function dispose(inst) {
+  inst.userClosed = true;
+  clearTimeout(inst.reconnectTimer);
+  if (inst.socket) {
+    inst.socket.onclose = null;
+    inst.socket.onmessage = null;
+    inst.socket.close();
+    inst.socket = null;
+  }
+  if (inst.term) {
+    inst.term.dispose();
+    inst.term = null;
+  }
+  inst.pane.remove();
+  tabs.delete(inst.id);
+  liveOrder = liveOrder.filter((x) => x !== inst.id);
+}
+
+async function respawnAndReattach(inst) {
   try {
-    session = await api.respawnSession(session.id);
+    inst.session = await api.respawnSession(inst.id);
   } catch (err) {
     if (err instanceof AuthError) return; // gate handles it
     window.alert(err instanceof Error ? err.message : String(err));
     return;
   }
-  ended = false;
-  $('term-overlay').classList.add('hidden');
-  $('btn-term-respawn').classList.add('hidden');
-  connect();
+  inst.ended = false;
+  if (inst.id === activeId) {
+    $('term-overlay').classList.add('hidden');
+    $('btn-term-respawn').classList.add('hidden');
+  }
+  connect(inst);
 }
 
 // ---- sizing ----
 
-function fitSoon() {
-  // Fit runs after layout settles; onResize below relays the result.
+function fitSoon(inst) {
+  // Fit runs after layout settles; onTermResize below relays the result.
   requestAnimationFrame(() => {
     try {
-      fitAddon.fit();
+      inst.fitAddon.fit();
     } catch {
-      /* container hidden — next resize/visibility event retries */
+      /* pane hidden — next resize/visibility event retries */
     }
   });
 }
 
-function onTermResize({ cols, rows }) {
-  sendResize(cols, rows);
+function onTermResize(inst, { cols, rows }) {
+  sendResize(inst, cols, rows);
 }
 
 // ---- input ----
@@ -260,47 +297,71 @@ function ctrlChar(ch) {
   return ch;
 }
 
-function onData(data) {
+function onData(inst, data) {
   if (ctrlArmed) {
     ctrlArmed = false;
     $('softkey-ctrl').classList.remove('active');
-    sendInput(ctrlChar(data[0]) + data.slice(1));
+    sendInput(inst, ctrlChar(data[0]) + data.slice(1));
   } else {
-    sendInput(data);
+    sendInput(inst, data);
   }
 }
 
 function softKey(name) {
+  const inst = active();
+  if (!inst) return;
   const arrows = { left: 'D', down: 'B', up: 'A', right: 'C' };
   if (name === 'ctrl') {
     ctrlArmed = !ctrlArmed;
     $('softkey-ctrl').classList.toggle('active', ctrlArmed);
     return;
   }
-  if (name === 'esc') sendInput('\x1b');
-  else if (name === 'tab') sendInput('\t');
+  if (name === 'esc') sendInput(inst, '\x1b');
+  else if (name === 'tab') sendInput(inst, '\t');
   else if (name in arrows) {
     const letter = arrows[name];
     if (ctrlArmed) {
       // CSI 1;5<x> — modified arrow in normal and app modes alike.
-      sendInput(`\x1b[1;5${letter}`);
+      sendInput(inst, `\x1b[1;5${letter}`);
       ctrlArmed = false;
       $('softkey-ctrl').classList.remove('active');
     } else {
-      sendInput(appCursorMode ? `\x1bO${letter}` : `\x1b[${letter}`);
+      sendInput(inst, inst.appCursorMode ? `\x1bO${letter}` : `\x1b[${letter}`);
     }
   }
 }
 
-// ---- mount / unmount ----
+// ---- instance lifecycle ----
 
-export async function mount(sessionId) {
-  session = await api.getSession(sessionId);
-  clearAttention(session.id);
-  setTitle(false);
-  setStatus(session.status.toLowerCase(), session.status === 'Dead' ? 'bad' : 'ok');
+function createPane() {
+  const pane = document.createElement('div');
+  pane.className = 'term-pane hidden-pane';
+  $('term-container').appendChild(pane);
+  return pane;
+}
 
-  term = new Terminal({
+async function ensureInstance(id) {
+  let inst = tabs.get(id);
+  if (inst) return inst;
+  const session = await api.getSession(id);
+  inst = {
+    id,
+    session,
+    term: null,
+    fitAddon: null,
+    socket: null,
+    pane: createPane(),
+    scrollback: [],
+    snapshotApplied: false,
+    ended: false,
+    userClosed: false,
+    reconnectTimer: null,
+    reconnectAttempt: 0,
+    appCursorMode: false,
+  };
+  tabs.set(id, inst);
+
+  inst.term = new Terminal({
     cursorBlink: true,
     fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace',
     fontSize: 14,
@@ -308,37 +369,91 @@ export async function mount(sessionId) {
     allowProposedApi: true,
     theme: { background: '#000000' },
   });
-  fitAddon = new FitAddon.FitAddon();
-  term.loadAddon(fitAddon);
-  term.loadAddon(new WebLinksAddon.WebLinksAddon());
+  inst.fitAddon = new FitAddon.FitAddon();
+  inst.term.loadAddon(inst.fitAddon);
+  inst.term.loadAddon(new WebLinksAddon.WebLinksAddon());
   try {
     const webgl = new WebglAddon.WebglAddon();
-    term.loadAddon(webgl);
+    inst.term.loadAddon(webgl);
     webgl.onContextLoss(() => webgl.dispose());
   } catch {
     // No WebGL — the DOM/canvas renderer already handles this terminal.
   }
-  term.open($('term-container'));
-  fitSoon();
-  term.focus();
+  inst.term.open(inst.pane);
 
-  term.onData(onData);
-  term.onResize(onTermResize);
-  term.onBell(() => {
-    if (document.hidden && session) {
-      setAttention(session.id);
-      setTitle(true);
+  inst.term.onData((data) => onData(inst, data));
+  inst.term.onResize((size) => onTermResize(inst, size));
+  inst.term.onBell(() => {
+    if (document.hidden) {
+      setAttention(inst.id);
+      if (inst.id === activeId) setTitle(true);
     }
   });
 
+  connect(inst);
+  return inst;
+}
+
+// Bounds live xterm+socket pairs to MAX_LIVE; the active tab is never
+// evicted. Evicted tabs stay in the strip and re-attach lazily.
+function evictIfNeeded() {
+  while (liveOrder.length > MAX_LIVE) {
+    const lru = [...liveOrder].reverse().find((id) => id !== activeId);
+    if (!lru) return;
+    dispose(tabs.get(lru));
+  }
+}
+
+// Switch the view's active session. Called on mount and by the router on
+// `#/s/<a>` → `#/s/<b>` — the terminal view stays mounted across both.
+export async function activate(id) {
+  const inst = await ensureInstance(id);
+  const prev = activeId ? tabs.get(activeId) : null;
+  activeId = id;
+  liveOrder = [id, ...liveOrder.filter((x) => x !== id)];
+
+  if (prev && prev.pane) prev.pane.classList.add('hidden-pane');
+  inst.pane.classList.remove('hidden-pane');
+  // The active pane leads DOM order so a bare `.xterm` locator resolves
+  // to the visible emulator.
+  $('term-container').prepend(inst.pane);
+
+  clearAttention(id);
+  setTitle(false);
+  if (inst.ended) {
+    setStatus('ended', 'bad');
+  } else if (inst.socket && inst.socket.readyState === WebSocket.OPEN) {
+    setStatus('connected', 'ok');
+  } else if (inst.session.status === 'Dead') {
+    setStatus('dead', 'bad');
+  } else {
+    setStatus('connecting…', 'warn');
+  }
+  $('term-overlay').classList.toggle('hidden', !inst.ended);
+  $('btn-term-respawn').classList.toggle('hidden', !inst.ended);
+
+  evictIfNeeded();
+  fitSoon(inst);
+  inst.term.focus();
+}
+
+// ---- mount / unmount ----
+
+export async function mount(sessionId) {
   $('btn-back').onclick = () => {
     window.location.hash = '#/';
   };
   $('btn-overlay-back').onclick = () => {
     window.location.hash = '#/';
   };
-  $('btn-overlay-respawn').onclick = () => void respawnAndReattach();
-  $('btn-term-respawn').onclick = () => void respawnAndReattach();
+  $('btn-overlay-respawn').onclick = () => {
+    const inst = active();
+    if (inst) void respawnAndReattach(inst);
+  };
+  $('btn-term-respawn').onclick = () => {
+    const inst = active();
+    if (inst) void respawnAndReattach(inst);
+  };
 
   for (const btn of document.querySelectorAll('#softkeys .softkey')) {
     // pointerdown (not click) keeps focus inside the xterm textarea so
@@ -348,48 +463,47 @@ export async function mount(sessionId) {
     btn.onpointerdown = (ev) => {
       ev.preventDefault();
       softKey(btn.dataset.key);
-      if (term) term.focus();
+      const inst = active();
+      if (inst && inst.term) inst.term.focus();
     };
   }
 
-  resizeObserver = new ResizeObserver(fitSoon);
+  resizeObserver = new ResizeObserver(() => {
+    const inst = active();
+    if (inst) fitSoon(inst);
+  });
   resizeObserver.observe($('term-wrap'));
-  window.addEventListener('orientationchange', fitSoon);
+  window.addEventListener('orientationchange', fitActive);
   document.addEventListener('visibilitychange', onVisible);
 
-  connect();
+  await activate(sessionId);
+}
+
+function fitActive() {
+  const inst = active();
+  if (inst) fitSoon(inst);
 }
 
 function onVisible() {
   if (!document.hidden) {
-    fitSoon();
-    if (session) {
-      clearAttention(session.id);
+    fitActive();
+    if (activeId) {
+      clearAttention(activeId);
       setTitle(false);
     }
   }
 }
 
 export function unmount() {
-  userClosed = true;
-  clearTimeout(reconnectTimer);
-  if (socket) {
-    socket.onclose = null;
-    socket.onmessage = null;
-    socket.close();
-    socket = null;
-  }
+  for (const inst of [...tabs.values()]) dispose(inst);
+  activeId = null;
+  liveOrder = [];
   if (resizeObserver) {
     resizeObserver.disconnect();
     resizeObserver = null;
   }
-  window.removeEventListener('orientationchange', fitSoon);
+  window.removeEventListener('orientationchange', fitActive);
   document.removeEventListener('visibilitychange', onVisible);
-  if (term) {
-    term.dispose();
-    term = null;
-  }
-  if (session) clearAttention(session.id);
+  ctrlArmed = false;
   document.title = 'dream';
-  session = null;
 }

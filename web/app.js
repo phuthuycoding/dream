@@ -1,17 +1,20 @@
 // app.js — bootstrap, token gate and the hash router.
 //
-// Routes: `#/` dashboard, `#/s/<id>` terminal attach. Views live in
-// dashboard.js / terminal.js; this module only decides which is mounted
-// and whether the token gate stands in front (FR-007).
+// Routes: `#/` home panel, `#/s/<id>` terminal attach. The session-list
+// sidebar (#view-dashboard) is persistent once authed — it is the
+// dashboard; `#main` swaps between the home panel and the terminal.
+// Views live in dashboard.js / terminal.js; this module decides which is
+// mounted and whether the token gate stands in front (FR-007).
 
 import { adoptTokenFromUrl, getToken, setToken, clearToken, api, AuthError } from './api.js';
 import * as dashboard from './dashboard.js';
 import * as terminal from './terminal.js';
 
 const $ = (id) => document.getElementById(id);
-const VIEWS = ['view-gate', 'view-dashboard', 'view-terminal'];
+const VIEWS = ['view-gate', 'view-home', 'view-terminal'];
 
-let active = null; // 'dashboard' | 'terminal'
+let active = null; // 'terminal' | null
+let dashAlive = false; // sidebar mounted + polling
 let authed = false;
 let navGen = 0;
 let navQueue = Promise.resolve();
@@ -27,12 +30,26 @@ function showGate(message) {
   err.textContent = message || '';
   err.classList.toggle('hidden', !message);
   unmountActive();
+  dropDashboard();
   show('view-gate');
 }
 
+async function ensureDashboard() {
+  if (dashAlive) return;
+  $('sidebar').classList.remove('hidden');
+  await dashboard.mount();
+  dashAlive = true;
+}
+
+function dropDashboard() {
+  if (!dashAlive) return;
+  dashboard.unmount();
+  $('sidebar').classList.add('hidden');
+  dashAlive = false;
+}
+
 function unmountActive() {
-  if (active === 'dashboard') dashboard.unmount();
-  else if (active === 'terminal') terminal.unmount();
+  if (active === 'terminal') terminal.unmount();
   active = null;
 }
 
@@ -53,8 +70,23 @@ async function applyRoute() {
     return;
   }
   const match = /^#\/s\/([0-9a-fA-F-]+)$/.exec(window.location.hash);
-  const target = match ? 'terminal' : 'dashboard';
-  if (active === target && !match) return; // dashboard stays mounted
+  await ensureDashboard();
+  if (match && active === 'terminal') {
+    // Session switch inside the mounted view — no teardown, no replay.
+    try {
+      await terminal.activate(match[1]);
+    } catch (err) {
+      unmountActive();
+      if (err instanceof AuthError) {
+        authed = false;
+        showGate(err.message);
+      } else {
+        console.warn('route activate failed:', err);
+        window.location.hash = '#/';
+      }
+    }
+    return;
+  }
   unmountActive();
   try {
     if (match) {
@@ -62,9 +94,7 @@ async function applyRoute() {
       active = 'terminal';
       await terminal.mount(match[1]);
     } else {
-      show('view-dashboard');
-      active = 'dashboard';
-      await dashboard.mount();
+      show('view-home');
     }
   } catch (err) {
     unmountActive();
@@ -72,12 +102,10 @@ async function applyRoute() {
       authed = false;
       showGate(err.message);
     } else {
-      // e.g. attaching a deleted session — fall back to the list.
+      // e.g. attaching a deleted session — fall back home.
       console.warn('route mount failed:', err);
       window.location.hash = '#/';
-      show('view-dashboard');
-      active = 'dashboard';
-      await dashboard.mount().catch(() => showGate());
+      show('view-home');
     }
   }
 }
@@ -116,6 +144,12 @@ function boot() {
     clearToken();
     authed = false;
     showGate();
+  });
+  $('btn-side').addEventListener('click', () => {
+    $('shell').classList.toggle('side-open');
+  });
+  $('side-backdrop').addEventListener('click', () => {
+    $('shell').classList.remove('side-open');
   });
   window.addEventListener('hashchange', () => void route());
   window.addEventListener('dream:unauthorized', () => {

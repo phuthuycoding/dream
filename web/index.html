@@ -4,71 +4,97 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <title>dream</title>
+  <link rel="icon" type="image/svg+xml" href="/icon.svg" />
   <link rel="stylesheet" href="/vendor/xterm.css" />
   <link rel="stylesheet" href="/style.css" />
 </head>
 <body>
   <header id="topbar">
-    <span id="brand">dream</span>
+    <span id="brand"><img src="/icon.svg" alt="" width="16" height="16" />dream</span>
     <span class="spacer"></span>
     <button id="btn-logout" class="btn ghost" title="Forget the stored token">log out</button>
   </header>
 
-  <main id="main">
-    <!-- Auth gate: shown when there is no usable token (FR-007). -->
-    <section id="view-gate" class="view hidden">
-      <form id="gate-form" class="card gate-card">
-        <h1>dream</h1>
-        <p>Paste the access token (see the daemon's startup output).</p>
-        <input id="gate-token" type="password" autocomplete="off" placeholder="token" required />
-        <p id="gate-error" class="error hidden"></p>
-        <button type="submit" class="btn primary">Connect</button>
-      </form>
-    </section>
-
-    <!-- Dashboard: session list + lifecycle actions. -->
-    <section id="view-dashboard" class="view hidden">
-      <div class="toolbar">
-        <button id="btn-new" class="btn primary">+ new session</button>
-        <button id="btn-clean-all" class="btn" title="Reset every session's replay log">clean all logs</button>
-        <button id="btn-refresh" class="btn" title="Reload the session list">refresh</button>
+  <div id="shell">
+    <!-- Sidebar: the session list itself — persistent across views (ui-v2). -->
+    <aside id="sidebar" class="hidden">
+      <div id="view-dashboard">
+        <div class="side-head">
+          <h1 id="dash-title">Sessions</h1>
+          <span id="session-count" class="count">0</span>
+          <span class="spacer"></span>
+          <button id="btn-refresh" class="btn ghost small" title="Reload the session list">refresh</button>
+        </div>
+        <button id="btn-new" class="btn primary side-new">+ new session</button>
+        <div id="session-list" class="session-list"></div>
+        <div id="dashboard-empty" class="empty hidden">
+          <div class="empty-glyph">&gt;_</div>
+          <p>No sessions yet</p>
+          <p class="empty-sub">Create one to attach a terminal from any browser.</p>
+          <button id="btn-empty-new" class="btn primary">create your first session</button>
+        </div>
+        <div class="side-foot">
+          <button id="btn-clean-all" class="btn ghost small" title="Reset every session's replay log">clean all logs</button>
+        </div>
       </div>
-      <div id="session-list" class="session-list"></div>
-      <p id="dashboard-empty" class="muted hidden">No sessions yet — create one.</p>
-    </section>
+    </aside>
+    <div id="side-backdrop" class="hidden"></div>
 
-    <!-- Terminal: fullscreen xterm on attach. -->
-    <section id="view-terminal" class="view hidden">
-      <div id="term-header">
-        <button id="btn-back" class="btn ghost">&larr; back</button>
-        <span id="term-title" class="term-title"></span>
-        <span id="term-status" class="pill"></span>
-        <span class="spacer"></span>
-        <button id="btn-term-respawn" class="btn hidden">respawn</button>
-      </div>
-      <div id="term-wrap">
-        <div id="term-container"></div>
-        <div id="term-overlay" class="hidden">
-          <div class="card">
-            <p id="overlay-text"></p>
-            <div class="row">
-              <button id="btn-overlay-respawn" class="btn primary">respawn</button>
-              <button id="btn-overlay-back" class="btn">dashboard</button>
+    <main id="main">
+      <!-- Auth gate: shown when there is no usable token (FR-007). -->
+      <section id="view-gate" class="view hidden">
+        <form id="gate-form" class="card gate-card">
+          <h1><img src="/icon.svg" alt="" width="28" height="28" />dream</h1>
+          <p>Paste the access token (see the daemon's startup output).</p>
+          <input id="gate-token" type="password" autocomplete="off" placeholder="token" required />
+          <p id="gate-error" class="error hidden"></p>
+          <button type="submit" class="btn primary">Connect</button>
+        </form>
+      </section>
+
+      <!-- Home: main area on `#/` — sidebar carries the list. -->
+      <section id="view-home" class="view hidden">
+        <div class="home-panel">
+          <img src="/icon.svg" alt="" width="48" height="48" />
+          <h1>Pick a session</h1>
+          <p class="muted">Choose a session in the sidebar to attach its terminal, or create a new one.</p>
+        </div>
+      </section>
+
+      <!-- Terminal: fullscreen xterm on attach. -->
+      <section id="view-terminal" class="view hidden">
+        <div id="term-header">
+          <button id="btn-side" class="btn ghost" title="Sessions" aria-label="toggle sessions sidebar">&#9776;</button>
+          <button id="btn-back" class="btn ghost">&larr; back</button>
+          <span id="term-title" class="term-title"></span>
+          <span id="term-status" class="pill"></span>
+          <span class="spacer"></span>
+          <button id="btn-term-respawn" class="btn hidden">respawn</button>
+        </div>
+        <div id="term-wrap">
+          <div id="term-container"></div>
+          <div id="term-overlay" class="hidden">
+            <div class="card">
+              <p id="overlay-text"></p>
+              <div class="row">
+                <button id="btn-overlay-respawn" class="btn primary">respawn</button>
+                <button id="btn-overlay-back" class="btn">dashboard</button>
+              </div>
             </div>
           </div>
         </div>
-      </div>
-      <div id="softkeys">
-        <button class="softkey" data-key="esc">Esc</button>
-        <button class="softkey" data-key="tab">Tab</button>
-        <button class="softkey toggle" data-key="ctrl" id="softkey-ctrl">Ctrl</button>
-        <button class="softkey" data-key="left">&#8592;</button>
-        <button class="softkey" data-key="down">&#8595;</button>
-        <button class="softkey" data-key="up">&#8593;</button>
-        <button class="softkey" data-key="right">&#8594;</button>
-      </div>
-    </section>
-  </main>
+        <div id="softkeys">
+          <button class="softkey" data-key="esc">Esc</button>
+          <button class="softkey" data-key="tab">Tab</button>
+          <button class="softkey toggle" data-key="ctrl" id="softkey-ctrl">Ctrl</button>
+          <button class="softkey" data-key="left">&#8592;</button>
+          <button class="softkey" data-key="down">&#8595;</button>
+          <button class="softkey" data-key="up">&#8593;</button>
+          <button class="softkey" data-key="right">&#8594;</button>
+        </div>
+      </section>
+    </main>
+  </div>
 
   <!-- Create / edit session modal (shared; cmd hidden in edit mode). -->
   <div id="modal" class="hidden">

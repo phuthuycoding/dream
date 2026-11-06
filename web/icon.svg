@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <rect width="64" height="64" fill="#0b0e13"/>
+  <!-- dream cloud, sharp-edged flat strokes -->
+  <path d="M14 44 L14 40 Q14 33 21 32 L22 32 Q24 22 33 22 Q42 22 44 31 L45 31 Q52 33 52 40 L52 44 Z"
+        fill="none" stroke="#4c8dff" stroke-width="4" stroke-linejoin="miter"/>
+  <!-- terminal chevron + underscore inside the cloud -->
+  <path d="M24 30 L34 38 L24 46" fill="none" stroke="#e8eaf0" stroke-width="5" stroke-linecap="square" stroke-linejoin="miter" transform="translate(0,-3)"/>
+  <rect x="36" y="40" width="12" height="4" fill="#e8eaf0"/>
+  <!-- amber dream-star glint -->
+  <path d="M52 8 L53.5 12 L57.5 13.5 L53.5 15 L52 19 L50.5 15 L46.5 13.5 L50.5 12 Z" fill="#d29922"/>
+</svg>

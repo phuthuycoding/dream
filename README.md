@@ -99,6 +99,23 @@ from the built-in dashboard.
 - **Log retention**: `--log-cap` / `--log-max-age` bound replay logs; the
   enforcer trims or resets them every 60 s.
 
+## Web UI
+
+Flat, professional list UI (no framework, no build step — vanilla ES
+modules embedded in the binary).
+
+- **Home**: full-width session list — one row per session (icon, name,
+  `cmd · cwd`, created-time, status pill, row actions), guided empty
+  state, page head with create/refresh/clean-all.
+- **Session tabs**: the terminal view keeps a browser-style tab strip —
+  one tab per open session, click to switch in place, `×` or
+  middle-click to detach (the session keeps running), `+` returns home.
+  Open tabs persist in `localStorage` (`dream.tabs`) and restore lazily
+  across reloads: only the active tab attaches, the rest attach on first
+  activation. At most 6 terminals stay live — the least-recently-used
+  background tab is evicted and re-attaches on next activation.
+- **Attention**: the bell/idle flag shows on the tab and the home row.
+
 ## Remote access via Tailscale
 
 dream is loopback-only by default; reach it from other devices over your
