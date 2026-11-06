@@ -2,7 +2,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Context;
-use webterm::{
+use dream::{
     auth::AuthToken,
     cli::Cli,
     config::Config,
@@ -16,11 +16,22 @@ async fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "webterm=info".into()),
+                .unwrap_or_else(|_| "dream=info".into()),
         )
         .init();
 
     let cli = Cli::parse();
+    match &cli.action {
+        Some(dream::cli::Action::Up) => return dream::daemon::up(&cli),
+        Some(dream::cli::Action::Down) => return dream::daemon::down(),
+        Some(dream::cli::Action::Status) => return dream::daemon::status(&cli),
+        Some(dream::cli::Action::Restart) => return dream::daemon::restart(&cli),
+        Some(dream::cli::Action::Logs { follow }) => return dream::daemon::logs(*follow),
+        Some(dream::cli::Action::Url) => return dream::daemon::url(&cli),
+        Some(dream::cli::Action::Ps) => return dream::daemon::ps(&cli),
+        Some(dream::cli::Action::Doctor) => return dream::daemon::doctor(&cli),
+        None => {}
+    }
     let cfg = Config::load(&cli)?;
     let addr = cfg.listen_addr();
 
@@ -33,7 +44,7 @@ async fn main() -> anyhow::Result<()> {
     };
 
     if cfg.bind.is_loopback() {
-        println!("{}", webterm::http::tailscale::tailscale_guidance(cfg.port));
+        println!("{}", dream::http::tailscale::tailscale_guidance(cfg.port));
     }
 
     // Resurrect sessions that were live when the daemon last stopped, and
@@ -58,17 +69,24 @@ async fn main() -> anyhow::Result<()> {
     }
 
     if auth.first_run {
-        println!("webterm ready — open this URL once to authenticate:");
-        println!("  http://{addr}/?token={}", auth.token);
+        use std::io::IsTerminal;
+        if std::io::stdout().is_terminal() {
+            println!("dream ready — open this URL once to authenticate:");
+            println!("  http://{addr}/?token={}", auth.token);
+        } else {
+            // Under launchd/systemd stdout lands in a log other users can
+            // read — point at the 0600 token file instead of printing it.
+            println!("dream ready — token file at {}", cfg.data_dir.join("token").display());
+        }
     } else {
-        println!("webterm ready — token file at {}", cfg.data_dir.display());
+        println!("dream ready — token file at {}", cfg.data_dir.display());
     }
 
     let app = build_router_with(manager, cfg.data_dir.clone(), auth.token);
     let listener = tokio::net::TcpListener::bind(&addr)
         .await
         .with_context(|| format!("cannot bind {addr} — port already in use?"))?;
-    tracing::info!("webterm listening on http://{addr}");
+    tracing::info!("dream listening on http://{addr}");
     axum::serve(listener, app).await?;
     Ok(())
 }
