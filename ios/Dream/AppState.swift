@@ -77,7 +77,16 @@ final class AppState {
     /// profile the user already left must not touch the active profile's
     /// token. The re-pair prompt only applies when the rejected profile
     /// is still the active one.
-    func handleUnauthorized(profileId: UUID) {
+    ///
+    /// `rejectedToken` is the credential the request carried: the
+    /// Keychain entry is cleared only when it still holds that same
+    /// value, so a stale response can't wipe a freshly re-paired token.
+    func handleUnauthorized(profileId: UUID, rejectedToken: String? = nil) {
+        let stored = store.token(for: profileId)
+        guard stored == rejectedToken else {
+            NSLog("AppState: ignored stale 401 for profile \(profileId.uuidString) — stored token differs from the rejected one")
+            return
+        }
         do {
             try store.clearToken(for: profileId)
         } catch {

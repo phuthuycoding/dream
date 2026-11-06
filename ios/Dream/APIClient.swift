@@ -5,7 +5,10 @@ import Foundation
 /// the session is gone, and a transport error means the daemon is
 /// unreachable.
 enum APIError: Error {
-    case unauthorized
+    /// 401 — carries the credential the rejected request used so the
+    /// store only clears it while the Keychain still holds that value
+    /// (a stale in-flight request can't wipe a fresh credential).
+    case unauthorized(token: String?)
     case notFound
     case unreachable(URLError)
     case unexpectedStatus(Int)
@@ -133,6 +136,16 @@ final class APIClient {
         return request
     }
 
+    /// The credential a built request carried — read back from the
+    /// Authorization header at rejection time, not re-fetched, so it is
+    /// exactly the token the 401 was about.
+    private static func requestToken(_ request: URLRequest) -> String? {
+        guard let header = request.value(forHTTPHeaderField: "Authorization") else {
+            return nil
+        }
+        return header.hasPrefix("Bearer ") ? String(header.dropFirst(7)) : header
+    }
+
     private func perform(_ request: URLRequest) async throws -> Data {
         let (data, response): (Data, URLResponse)
         do {
@@ -147,7 +160,7 @@ final class APIClient {
         case 200...299:
             return data
         case 401:
-            throw APIError.unauthorized
+            throw APIError.unauthorized(token: Self.requestToken(request))
         case 404:
             throw APIError.notFound
         default:

@@ -28,6 +28,12 @@ final class WSClient: NSObject {
     var onEnd: (String) -> Void = { _ in }
     /// `a` — the session wants attention.
     var onAttention: () -> Void = {}
+    /// The upgrade answered 401 — the credential was rejected; the
+    /// re-pair route applies. Fires before `onClose`.
+    var onUnauthorized: () -> Void = {}
+    /// The upgrade answered 404 — the session no longer exists on the
+    /// daemon; the session list should refresh. Fires before `onClose`.
+    var onSessionGone: () -> Void = {}
     /// The socket closed; `error` is nil for a clean close.
     var onClose: (Error?) -> Void = { _ in }
 
@@ -37,6 +43,9 @@ final class WSClient: NSObject {
     private var pendingOutput: [Data] = []
     private var snapshotApplied = false
     private var finished = false
+    /// Keepalive — a dead socket that never reported an error still
+    /// answers the ping timeout. Not protocol state.
+    private var pingTimer: Timer?
 
     init(url: URL) {
         self.url = url
@@ -75,6 +84,15 @@ final class WSClient: NSObject {
         self.task = task
         task.resume()
         receiveNext()
+        // ~15s keepalive — silent stalls (a suspend or a dead route) are
+        // reported through the pong error, not left hanging forever.
+        pingTimer = Timer.scheduledTimer(withTimeInterval: 15, repeats: true) { [weak self] _ in
+            self?.task?.sendPing { [weak self] error in
+                if let error {
+                    self?.finish(error: error)
+                }
+            }
+        }
     }
 
     /// `i` frame — keystroke bytes for the pty's stdin.
@@ -162,6 +180,8 @@ final class WSClient: NSObject {
     private func finish(error: Error?) {
         guard !finished else { return }
         finished = true
+        pingTimer?.invalidate()
+        pingTimer = nil
         flushPending() // never strand buffered replay bytes
         task?.cancel(with: .normalClosure, reason: nil)
         session?.invalidateAndCancel()
@@ -186,6 +206,14 @@ extension WSClient: URLSessionWebSocketDelegate {
         task: URLSessionTask,
         didCompleteWithError error: Error?
     ) {
+        // A failed upgrade carries the HTTP status on task.response —
+        // classify it before the generic close so 401 routes to re-pair
+        // and 404 names the dead session instead of a bare error.
+        switch (task.response as? HTTPURLResponse)?.statusCode {
+        case 401: onUnauthorized()
+        case 404: onSessionGone()
+        default: break
+        }
         finish(error: error)
     }
 }

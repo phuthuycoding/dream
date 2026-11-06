@@ -8,6 +8,7 @@ import SwiftUI
 /// alive on the daemon.
 struct TerminalScreenView: View {
     @Environment(AttentionCenter.self) private var attentionCenter
+    @Environment(\.scenePhase) private var scenePhase
     @State private var controller: TerminalController
 
     init(
@@ -16,7 +17,8 @@ struct TerminalScreenView: View {
         baseURL: URL,
         tokenProvider: @escaping () -> String?,
         onAttention: @escaping () -> Void,
-        onUnauthorized: @escaping () -> Void
+        onUnauthorized: @escaping (String?) -> Void,
+        onSessionGone: @escaping () -> Void
     ) {
         _controller = State(
             initialValue: TerminalController(
@@ -25,7 +27,8 @@ struct TerminalScreenView: View {
                 baseURL: baseURL,
                 tokenProvider: tokenProvider,
                 onAttention: onAttention,
-                onUnauthorized: onUnauthorized
+                onUnauthorized: onUnauthorized,
+                onSessionGone: onSessionGone
             )
         )
     }
@@ -36,6 +39,13 @@ struct TerminalScreenView: View {
             .navigationTitle(controller.terminalTitle.isEmpty ? controller.session.name : controller.terminalTitle)
             .navigationBarTitleDisplayMode(.inline)
             .overlay { overlay }
+            .onChange(of: scenePhase) { _, phase in
+                // A socket suspended in the background is dead by now —
+                // reattach on return instead of showing a stale overlay.
+                if phase == .active {
+                    controller.resumeIfNeeded()
+                }
+            }
             .onAppear {
                 // While this terminal is up its own attention edge is
                 // suppressed — the attach already acks the flag.
@@ -66,13 +76,21 @@ struct TerminalScreenView: View {
                 actionIdentifier: "terminal.respawn",
                 action: controller.respawn
             )
+        case .reconnecting(let status):
+            EndOverlay(
+                title: "Connection lost",
+                detail: status,
+                actionTitle: "Reconnect now",
+                actionIdentifier: "terminal.reconnect",
+                action: controller.manualReconnect
+            )
         case .disconnected(let reason):
             EndOverlay(
                 title: "Disconnected",
                 detail: reason,
                 actionTitle: "Reconnect",
                 actionIdentifier: "terminal.reconnect",
-                action: controller.attach
+                action: controller.manualReconnect
             )
         case .live:
             EmptyView()

@@ -17,7 +17,11 @@ final class TerminalController {
         case live
         /// `e` notice arrived — the session ended; overlay offers respawn.
         case ended(String)
-        /// The socket dropped or failed without an end frame.
+        /// The socket dropped; an automatic reattach is scheduled —
+        /// the payload says when and which attempt this is.
+        case reconnecting(String)
+        /// The socket dropped or failed without an end frame and the
+        /// retries are exhausted — the overlay offers manual reconnect.
         case disconnected(String)
     }
 
@@ -32,7 +36,17 @@ final class TerminalController {
     /// `a` frame forwarded for the list's attention dot (TASK-005 will
     /// consume this more fully).
     private let onAttention: () -> Void
-    private let onUnauthorized: () -> Void
+    /// A 401 — the rejected credential is the argument so AppState can
+    /// compare it against what the Keychain holds now.
+    private let onUnauthorized: (String?) -> Void
+    /// The upgrade answered 404 — the session row is stale; re-list.
+    private let onSessionGone: () -> Void
+
+    /// web/terminal.js parity — 500ms floor, ~8s ceiling, bounded so a
+    /// permanently dead daemon doesn't retry forever.
+    private static let reconnectFloorMs = 500
+    private static let reconnectCeilingMs = 8_000
+    private static let maxReconnectAttempts = 8
 
     /// Every live access happens on the main actor; `nonisolated(unsafe)`
     /// only lets `deinit` close the socket. By then the client callbacks'
@@ -42,6 +56,24 @@ final class TerminalController {
     private nonisolated(unsafe) var ws: WSClient?
     @ObservationIgnored
     private weak var terminalView: SwiftTerm.TerminalView?
+    @ObservationIgnored
+    private var reconnectAttempt = 0
+    @ObservationIgnored
+    private var reconnectTask: Task<Void, Never>?
+    /// The token this attach used — a handshake 401 reports it so the
+    /// store only clears it when the Keychain still holds that value.
+    @ObservationIgnored
+    private var attachToken: String?
+    /// A 401/404 already reported terminal failure — the close that
+    /// follows must not schedule a reconnect.
+    @ObservationIgnored
+    private var reconnectSuppressed = false
+    /// Output coalescing: bytes buffer and the view feeds once per
+    /// runloop tick instead of once per frame.
+    @ObservationIgnored
+    private var pendingFeed = Data()
+    @ObservationIgnored
+    private var feedScheduled = false
 
     init(
         session: DreamSession,
@@ -49,7 +81,8 @@ final class TerminalController {
         baseURL: URL,
         tokenProvider: @escaping () -> String?,
         onAttention: @escaping () -> Void,
-        onUnauthorized: @escaping () -> Void
+        onUnauthorized: @escaping (String?) -> Void,
+        onSessionGone: @escaping () -> Void
     ) {
         self.session = session
         self.client = client
@@ -57,12 +90,14 @@ final class TerminalController {
         self.tokenProvider = tokenProvider
         self.onAttention = onAttention
         self.onUnauthorized = onUnauthorized
+        self.onSessionGone = onSessionGone
     }
 
     deinit {
         // A controller torn down while still attached (profile switch
         // rebuilds the whole screen) must not leave a socket behind.
         ws?.disconnect()
+        reconnectTask?.cancel()
     }
 
     /// The representable hands over the view once created.
@@ -74,10 +109,14 @@ final class TerminalController {
     /// re-pair between attaches takes effect on the next one.
     func attach() {
         detach()
+        reconnectTask?.cancel()
+        reconnectTask = nil
+        reconnectSuppressed = false
+        attachToken = tokenProvider()
         guard let url = WSClient.attachURL(
             baseURL: baseURL,
             sessionID: session.id,
-            token: tokenProvider()
+            token: attachToken
         ) else {
             phase = .disconnected("The daemon's address is not a valid URL.")
             return
@@ -95,6 +134,12 @@ final class TerminalController {
         ws.onAttention = { [weak self] in
             self?.onAttention()
         }
+        ws.onUnauthorized = { [weak self] in
+            self?.didUnauthorized()
+        }
+        ws.onSessionGone = { [weak self] in
+            self?.didSessionGone()
+        }
         ws.onClose = { [weak self] error in
             self?.didClose(error: error)
         }
@@ -106,9 +151,32 @@ final class TerminalController {
     /// Detach leaves the session alive — it closes the socket and
     /// nothing else. Reattach gets the scrollback replay from the daemon.
     func detach() {
+        reconnectTask?.cancel()
+        reconnectTask = nil
         guard let old = ws else { return }
         ws = nil
         old.disconnect()
+    }
+
+    /// Foreground return (scenePhase → .active): iOS suspends sockets in
+    /// the background, so anything short of a proven-live attach gets a
+    /// fresh socket now — no backoff wait while the user is watching.
+    func resumeIfNeeded() {
+        guard !isEnded, phase != .live else { return }
+        reconnectAttempt = 0
+        attach()
+    }
+
+    /// The overlay's manual retry — a fresh bounded series, same as a
+    /// first attach.
+    func manualReconnect() {
+        reconnectAttempt = 0
+        attach()
+    }
+
+    private var isEnded: Bool {
+        if case .ended = phase { return true }
+        return false
     }
 
     /// The `e` overlay's affordance: `POST …/respawn`, then re-attach.
@@ -119,16 +187,28 @@ final class TerminalController {
             do {
                 _ = try await client.respawnSession(id: session.id)
                 attach()
-            } catch APIError.unauthorized {
-                onUnauthorized()
+            } catch APIError.unauthorized(let token) {
+                onUnauthorized(token)
             } catch {
                 phase = .disconnected(APIError.describe(error))
             }
         }
     }
 
+    /// Buffer output and feed the emulator once per runloop tick — a
+    /// chatty shell emits a frame per read(), but the view parses just
+    /// the coalesced batch.
     private func feed(_ bytes: Data) {
-        terminalView?.feed(byteArray: ArraySlice(bytes))
+        pendingFeed.append(bytes)
+        guard !feedScheduled else { return }
+        feedScheduled = true
+        Task { [weak self] in
+            guard let self else { return }
+            self.feedScheduled = false
+            let batch = self.pendingFeed
+            self.pendingFeed = Data()
+            self.terminalView?.feed(byteArray: ArraySlice(batch))
+        }
     }
 
     /// Applies one `s` payload the way the web client does: resize the
@@ -147,6 +227,9 @@ final class TerminalController {
             view.feed(byteArray: ArraySlice(chunk))
         }
         view.feed(byteArray: ArraySlice(payload))
+        // A completed attach contract resets the backoff counter — the
+        // next drop starts again from the floor.
+        reconnectAttempt = 0
         phase = .live
     }
 
@@ -192,7 +275,50 @@ final class TerminalController {
         ws = nil
         if case .ended = phase { return }
         let reason = error.map { APIError.describe($0) } ?? "The daemon closed the connection."
-        phase = .disconnected(reason)
+        // A classified failure (401/404) already set the terminal phase —
+        // retrying the same dead route would just loop the same error.
+        guard !reconnectSuppressed else { return }
+        scheduleReconnect(reason: reason)
+    }
+
+    /// Bounded-backoff reattach (web/terminal.js parity): 500ms floor
+    /// doubling to an ~8s ceiling. Past the attempt cap the overlay
+    /// offers manual reconnect instead of retrying a dead route forever.
+    private func scheduleReconnect(reason: String) {
+        guard reconnectAttempt < Self.maxReconnectAttempts else {
+            phase = .disconnected("\(reason) — reconnect gave up after \(Self.maxReconnectAttempts) attempts.")
+            return
+        }
+        let delayMs = min(
+            Self.reconnectFloorMs * (1 << reconnectAttempt),
+            Self.reconnectCeilingMs
+        )
+        reconnectAttempt += 1
+        phase = .reconnecting(
+            "\(reason)\nReconnecting in \(delayMs / 1000)s… (attempt \(reconnectAttempt)/\(Self.maxReconnectAttempts))"
+        )
+        reconnectTask = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(delayMs))
+            guard !Task.isCancelled, let self, !self.reconnectSuppressed else { return }
+            self.reconnectTask = nil
+            self.attach()
+        }
+    }
+
+    /// Handshake 401 — the credential in `attachToken` was rejected;
+    /// report it and suppress reconnect (the re-pair route owns it).
+    private func didUnauthorized() {
+        reconnectSuppressed = true
+        phase = .disconnected(APIError.unauthorized(token: attachToken).userMessage)
+        onUnauthorized(attachToken)
+    }
+
+    /// Handshake 404 — the session is gone on the daemon; suppress
+    /// reconnect and ask the session list to refresh.
+    private func didSessionGone() {
+        reconnectSuppressed = true
+        phase = .disconnected(APIError.notFound.userMessage)
+        onSessionGone()
     }
 }
 
