@@ -77,6 +77,7 @@ pub fn build_router_with(
         sessions,
     };
     Router::new()
+        .route("/auth/mode", get(auth_mode))
         .route("/auth/github", get(github_login_start))
         .route("/auth/callback", get(github_login_callback))
         .route("/auth/logout", post(logout))
@@ -375,6 +376,13 @@ async fn github_login_callback(
 /// absent credential must not lock a client out of logging out.
 async fn logout() -> Response {
     redirect_with_cookies("/", &[clear_cookie(SESSION_COOKIE)])
+}
+
+/// `GET /auth/mode` — public probe the gate fetches at bootstrap to decide
+/// whether the "Sign in with GitHub" button shows. A GET outside `/api/`
+/// already passes the middleware's static-shell exemption.
+async fn auth_mode(State(state): State<AppState>) -> Json<serde_json::Value> {
+    Json(serde_json::json!({ "github": state.oauth.is_some() }))
 }
 
 /// `http://<host>/auth/callback` rebuilt from the request's Host header —

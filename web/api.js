@@ -69,6 +69,26 @@ async function request(path, { method = 'GET', body } = {}) {
   return resp.json();
 }
 
+// `GET /auth/mode` → {github: bool} — public probe telling the gate whether
+// the daemon was started with GitHub OAuth configured. Not routed through
+// `request()`: it needs no Authorization header and must not trip the 401
+// gate-clearing path.
+export async function oauthMode() {
+  const resp = await fetch('/auth/mode');
+  if (!resp.ok) {
+    throw new ApiError(resp.status, `GET /auth/mode → ${resp.status}`);
+  }
+  return resp.json();
+}
+
+// `POST /auth/logout` expires the `dream_session` cookie server-side; the
+// response is a 302 to `/`, so this is a raw fetch, not `request()`'s JSON
+// path. A rejected request is non-fatal — the local token clear still
+// gates the UI — so callers only log it.
+export function logout() {
+  return fetch('/auth/logout', { method: 'POST' });
+}
+
 export const api = {
   listSessions: () => request('/api/sessions'),
   createSession: (fields) =>

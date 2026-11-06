@@ -6,7 +6,7 @@
 // Views live in dashboard.js / terminal.js; this module decides which is
 // mounted and whether the token gate stands in front (FR-007).
 
-import { adoptTokenFromUrl, getToken, setToken, clearToken, api, AuthError } from './api.js';
+import { adoptTokenFromUrl, getToken, setToken, clearToken, api, oauthMode, logout, AuthError } from './api.js';
 import * as dashboard from './dashboard.js';
 import * as terminal from './terminal.js';
 
@@ -133,18 +133,18 @@ async function applyRoute() {
   }
 }
 
-async function tryStoredToken() {
-  if (!getToken()) {
-    showGate();
-    return;
-  }
+// The probe is the only auth signal: a signed `dream_session` cookie
+// satisfies it with no stored token, so a browser returning from the
+// GitHub callback skips the gate; a 401 means neither credential holds.
+async function tryAuth() {
+  const hadToken = Boolean(getToken());
   try {
-    await api.listSessions(); // probe — a bad stored token gets 401'd
+    await api.listSessions(); // a bad stored token gets 401'd
     authed = true;
     await route();
   } catch (err) {
     if (err instanceof AuthError) {
-      showGate('stored token rejected — paste the token again');
+      showGate(hadToken ? 'stored token rejected — paste the token again' : '');
     } else {
       showGate(`cannot reach the daemon: ${err.message}`);
     }
@@ -157,7 +157,18 @@ async function gateSubmit(ev) {
   if (!token) return;
   setToken(token);
   $('gate-token').value = '';
-  await tryStoredToken();
+  await tryAuth();
+}
+
+// The GitHub button shows only when the daemon advertises oauth — the
+// anchor targets `/auth/github`, which 404s when unconfigured.
+async function detectOauth() {
+  try {
+    const mode = await oauthMode();
+    if (mode.github) $('gate-github').classList.remove('hidden');
+  } catch (err) {
+    console.warn('oauth mode probe failed:', err);
+  }
 }
 
 function boot() {
@@ -167,6 +178,8 @@ function boot() {
     clearToken();
     authed = false;
     showGate();
+    // Best-effort cookie expiry: a failed POST still leaves the gate up.
+    void logout().catch((err) => console.warn('logout request failed:', err));
   });
   $('btn-side').addEventListener('click', () => {
     $('shell').classList.toggle('side-open');
@@ -179,7 +192,8 @@ function boot() {
     authed = false;
     showGate('session expired — paste the token again');
   });
-  void tryStoredToken();
+  void detectOauth();
+  void tryAuth();
 }
 
 boot();
