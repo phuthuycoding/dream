@@ -236,6 +236,25 @@ fn print_url(cfg: &Config) {
     }
 }
 
+/// True when the service manager still has the unit loaded — in ANY state
+/// (running, spawn-scheduled, crashed pending respawn). Used by `down` to
+/// decide whether the unit file is safe to delete.
+fn service_loaded(p: Platform) -> bool {
+    match p {
+        Platform::Macos => Command::new("/bin/launchctl")
+            .args(["print", &format!("gui/{}/{}", uid().unwrap_or_default(), LABEL)])
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false),
+        Platform::Linux => systemd_out(&["is-enabled", "dream.service"])
+            .map(|o| o.status.success())
+            .unwrap_or(false)
+            || systemd_out(&["is-active", "dream.service"])
+                .map(|o| o.status.success())
+                .unwrap_or(false),
+    }
+}
+
 fn service_active(p: Platform) -> bool {
     match p {
         Platform::Macos => Command::new("/bin/launchctl")
@@ -260,7 +279,7 @@ fn unit_fresh_enough(unit_path: &std::path::Path, exe: &str) -> bool {
     let exe_mt = fs::metadata(exe).and_then(|m| m.modified()).ok();
     match (unit_mt, exe_mt) {
         (Some(u), Some(b)) => u >= b,
-        (Some(_), None) => true,
+        (Some(_), None) => false,
         (None, _) => false,
     }
 }
@@ -384,11 +403,11 @@ pub fn down() -> anyhow::Result<()> {
     match stop {
         Ok(()) => {}
         Err(err) => {
-            // Stop failed — only treat as "not running" when the manager
-            // confirms the service is actually inactive; never delete the
-            // unit while a KeepAlive job might still be live.
-            if service_active(p) {
-                return Err(err.context("service is still running — not removing its unit"));
+            // Stop failed — only delete the unit when the manager confirms
+            // it is not loaded at all; any loaded state (running, scheduled,
+            // crashed-pending) means the file must stay.
+            if service_loaded(p) {
+                return Err(err.context("service is still loaded — not removing its unit"));
             }
             eprintln!("{err} (service not loaded)");
         }
@@ -655,18 +674,33 @@ pub fn doctor(cli: &Cli) -> anyhow::Result<()> {
     };
     checks.push((tok_ok, tok_msg));
 
-    // A wedged tailscaled must not hang the checklist — bound the probe.
+    // A wedged tailscaled must not hang the checklist — bound the probe
+    // and kill the probe process if it outlives the deadline.
     let (tx, rx) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
-        let _ = tx.send(
-            ["tailscale", "/opt/homebrew/bin/tailscale", "/usr/local/bin/tailscale", "/usr/bin/tailscale"]
-                .iter()
-                .find_map(|bin| Command::new(bin).arg("status").output().ok())
-                .map(|o| o.status.success())
-                .unwrap_or(false),
-        );
+        let bins = ["tailscale", "/opt/homebrew/bin/tailscale", "/usr/local/bin/tailscale", "/usr/bin/tailscale"];
+        for bin in bins {
+            if let Ok(mut child) = Command::new(bin).arg("status").spawn() {
+                let _ = tx.send(child.id());
+                let ok = child.wait().map(|s| s.success()).unwrap_or(false);
+                let _ = tx.send(ok as u32);
+                return;
+            }
+        }
+        let _ = tx.send(u32::MAX);
     });
-    let ts_connected = rx.recv_timeout(Duration::from_secs(3)).unwrap_or(false);
+    let pid = rx.recv().unwrap_or(u32::MAX);
+    let ts_connected = if pid == u32::MAX {
+        false
+    } else {
+        match rx.recv_timeout(Duration::from_secs(3)) {
+            Ok(ok) => ok == 1,
+            Err(_) => {
+                let _ = Command::new("/bin/kill").arg(pid.to_string()).output();
+                false
+            }
+        }
+    };
     match ts_connected {
         true => checks.push((true, "tailscale connected".into())),
         false => checks.push((true, "tailscale not connected/installed (optional — loopback-only is fine)".into())),
@@ -735,18 +769,24 @@ mod tests {
     }
 
     #[test]
-    fn down_on_missing_agent_exits_clean() {
-        // Not-installed path is covered by the code branch: the stop call
-        // fails, service_active is false → unit removal + "dream is down".
-        // (Exercised in the real-cycle behaviour run; unit-level check here
-        // verifies the early-exit predicate.)
-        assert!(!service_active(Platform::Macos) || service_active(Platform::Macos));
+    fn down_on_missing_agent_returns_ok() {
+        // Requires the agent to be absent; on a machine where the test
+        // daemon is installed it would legitimately remove it — so skip
+        // when a unit is already loaded rather than asserting a tautology.
+        if service_loaded(Platform::Macos) {
+            return;
+        }
+        down().expect("down with no agent should exit clean");
+        assert!(!plist_path().unwrap().exists());
     }
 
     #[test]
-    fn systemd_unit_rejects_dollar_and_backslash_escape() {
-        let u = systemd_unit(&["/b".into(), "/p$HOME/x".into()]).unwrap();
+    fn systemd_unit_pins_env_path_and_escapes() {
+        let u = systemd_unit(&["/b".into(), "/p$HOME/x".into(), "a\nb".into()]).unwrap();
+        assert!(u.contains("Environment=PATH="));
+        assert!(u.contains("%h/.local/bin"));
         assert!(u.contains("/p$$HOME/x"));
+        assert!(u.contains("a\\nb"));
         assert!(systemd_unit(&["/b".into(), "a\u{0007}b".into()]).is_err());
     }
 
