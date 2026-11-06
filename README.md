@@ -107,13 +107,15 @@ modules embedded in the binary).
 - **Home**: full-width session list — one row per session (icon, name,
   `cmd · cwd`, created-time, status pill, row actions), guided empty
   state, page head with create/refresh/clean-all.
-- **Session tabs**: the terminal view keeps a browser-style tab strip —
-  one tab per open session, click to switch in place, `×` or
-  middle-click to detach (the session keeps running), `+` returns home.
-  Open tabs persist in `localStorage` (`dream.tabs`) and restore lazily
-  across reloads: only the active tab attaches, the rest attach on first
-  activation. At most 6 terminals stay live — the least-recently-used
-  background tab is evicted and re-attaches on next activation.
+- **Sessions sidebar**: a persistent left sidebar lists every session —
+  status dot, name, `cmd · cwd`, attention dot, row actions; clicking
+  one attaches or switches the terminal in place. On mobile it becomes
+  a drawer (☰ in the topbar).
+- **Keep-alive terminals**: each attached session keeps its own
+  xterm + WebSocket in a hidden pane, so switching preserves screen
+  state with no replay. At most 6 terminals stay live — the
+  least-recently-used background instance is evicted and re-attaches
+  (with a replay) on next selection.
 - **Attention**: the bell/idle flag shows on the tab and the home row.
 
 ## Remote access via Tailscale

@@ -19,12 +19,12 @@ The dashboard is a bare card grid under a utilitarian toolbar: no brand presence
 
 ## Scope
 ### In Scope
-- Design-token system in `web/style.css`: calm dark palette plus spacing/radius/typography tokens; every view restyled from tokens (hairline borders, soft rounded surfaces, zero shadows)
+- Design-token system in `web/style.css`: calm dark palette plus spacing/radius/typography tokens; every view restyled from tokens (hairline borders, sharp corners (border-radius: 0), zero shadows)
 - Persistent sessions sidebar (replaces the separate dashboard view): every session listed with status dot, name, mono cmd·cwd, attention marker and dim row actions (identical labels); the active route's item is highlighted; clicking an item attaches/switches in place; on small screens it collapses to a drawer (`#btn-side` toggle + backdrop)
-- Multi-attach client state: a lazily created xterm + WebSocket kept alive per open tab (at most 6 live instances — LRU-evicted tabs stay in the strip and re-attach on next activation) so switching preserves screen state without a replay; a session poll refreshes tab status dots and labels
+- Multi-attach client state: a lazily created xterm + WebSocket kept alive per open tab (at most 6 live instances — LRU-evicted instances re-attach on next selection and re-attach on next activation) so switching preserves screen state without a replay; a session poll refreshes tab status dots and labels
 - Home: `#/` shows a welcome panel in the main area ("pick a session") while the sidebar carries the real list — page head (`Sessions` + count, quick actions, primary `#btn-new`), compact items (name, badge, `cmd · cwd`, created), guided `#dashboard-empty` state for first-time users
-- Persisted open-tabs list (localStorage) restored across reloads; attention indicators surfaced on tabs as well as rows
-- Accessibility basics: `prefers-reduced-motion` honoured, visible focus styles, tablist semantics with keyboard navigation, aria-labels on icon-only controls
+- Keep-alive terminal instances in memory (re-attached on selection; not persisted); attention indicators surfaced on sidebar items as well as rows
+- Accessibility basics: `prefers-reduced-motion` honoured, visible focus styles, keyboard-activatable sidebar items (Enter attaches), aria-labels on icon-only controls
 - New playwright spec for tabs + home; all 14 existing e2e tests keep passing unchanged
 
 ### Out of Scope
@@ -37,7 +37,7 @@ The dashboard is a bare card grid under a utilitarian toolbar: no brand presence
 ## Affected surfaces
 - `web/index.html` — page head + session-row list markup, terminal tab-strip container, restyled gate/modal wrappers
 - `web/style.css` — flat design-token system (colour, spacing, radius, typography) restyling all views
-- `web/dashboard.js` — home view render: session rows with last-active, guided empty state, quick actions
+- `web/dashboard.js` — home view render: session rows with created-time, guided empty state, quick actions
 - `web/terminal.js`, `web/app.js` — session tab strip, per-tab multi-attach lifecycle, persisted open tabs
 - `e2e/` — new ui-v2 playwright spec; the existing 14 tests must pass unchanged
 - `README.md`, `docs/requirement/app/web-terminal.md` — UI description updated for the home view and session tabs
@@ -47,7 +47,7 @@ The dashboard is a bare card grid under a utilitarian toolbar: no brand presence
 
 ## Functional Requirements
 ### FR-001
-- Requirement: Flat design system — CSS custom-property tokens for colour, spacing, radius and typography in `web/style.css`; a calm dark palette with generous spacing, soft rounded surfaces and hairline borders applied consistently across topbar, gate, home, terminal, modal, softkeys and the new tab strip; zero shadows or elevation, no gradients or heavy strokes; the home view lays out full-width, not in a centred column.
+- Requirement: Flat design system — CSS custom-property tokens for colour, spacing, radius and typography in `web/style.css`; a calm dark palette with generous spacing, sharp corners (border-radius: 0) and hairline borders applied consistently across topbar, gate, home, terminal, modal, softkeys and the new tab strip; zero shadows or elevation, no gradients or heavy strokes; the home view lays out full-width, not in a centred column.
 - Priority: must
 
 ### FR-002
@@ -75,8 +75,8 @@ The dashboard is a bare card grid under a utilitarian toolbar: no brand presence
 
 ## Main Use Cases
 - UC-001 Browse the home view and create/attach a session
-- UC-002 Switch between attached sessions via the tab strip
-- UC-003 Detach a session tab without killing it
+- UC-002 Switch between attached sessions via the sidebar
+- UC-003 Back out of the terminal without killing the session
 - UC-004 Use the terminal on mobile; see attention indicators on tabs and rows
 - UC-005 Navigate with reduced motion / keyboard and assistive tech
 

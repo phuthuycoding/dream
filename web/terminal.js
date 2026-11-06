@@ -54,6 +54,7 @@ const utf8 = new TextDecoder();
 const tabs = new Map();
 let liveOrder = []; // most-recently-used first — LRU bookkeeping
 let activeId = null;
+let mounted = false; // guards in-flight async mounts vs unmount/logout
 let resizeObserver = null;
 let ctrlArmed = false;
 
@@ -160,6 +161,8 @@ function handleSnapshot(inst, payload) {
 }
 
 function handleEnd(inst, payload) {
+  inst.endText = payload && payload.byteLength
+    ? latin1.decode(payload) : '';
   flushScrollback(inst); // dead attach: replay arrives without a snapshot
   inst.ended = true;
   if (inst.id === activeId) {
@@ -230,7 +233,13 @@ function connect(inst) {
     if (inst.id === activeId) {
       setStatus(`reconnecting in ${Math.round(delay / 100) / 10}s`, 'warn');
     }
-    inst.reconnectTimer = setTimeout(() => connect(inst), delay);
+    inst.reconnectTimer = setTimeout(() => {
+      if (inst.id !== activeId) {
+        api.getSession(inst.id).then(() => connect(inst), () => dispose(inst));
+      } else {
+        connect(inst);
+      }
+    }, delay);
   };
   inst.socket.onerror = () => {
     // onclose follows with the real teardown/reconnect decision.
@@ -344,6 +353,7 @@ async function ensureInstance(id) {
   let inst = tabs.get(id);
   if (inst) return inst;
   const session = await api.getSession(id);
+  if (!mounted) return null; // unmounted/logged out while the fetch flew
   inst = {
     id,
     session,
@@ -354,6 +364,7 @@ async function ensureInstance(id) {
     scrollback: [],
     snapshotApplied: false,
     ended: false,
+    endText: '',
     userClosed: false,
     reconnectTimer: null,
     reconnectAttempt: 0,
@@ -384,9 +395,9 @@ async function ensureInstance(id) {
   inst.term.onData((data) => onData(inst, data));
   inst.term.onResize((size) => onTermResize(inst, size));
   inst.term.onBell(() => {
-    if (document.hidden) {
+    if (document.hidden || inst.id !== activeId) {
       setAttention(inst.id);
-      if (inst.id === activeId) setTitle(true);
+      if (document.hidden) setTitle(true);
     }
   });
 
@@ -408,8 +419,11 @@ function evictIfNeeded() {
 // `#/s/<a>` → `#/s/<b>` — the terminal view stays mounted across both.
 export async function activate(id) {
   const inst = await ensureInstance(id);
+  if (!inst) return;
   const prev = activeId ? tabs.get(activeId) : null;
   activeId = id;
+  ctrlArmed = false;
+  $('softkey-ctrl').classList.remove('active');
   liveOrder = [id, ...liveOrder.filter((x) => x !== id)];
 
   if (prev && prev.pane) prev.pane.classList.add('hidden-pane');
@@ -429,6 +443,7 @@ export async function activate(id) {
   } else {
     setStatus('connecting…', 'warn');
   }
+  if (inst.ended) $('overlay-text').textContent = inst.endText;
   $('term-overlay').classList.toggle('hidden', !inst.ended);
   $('btn-term-respawn').classList.toggle('hidden', !inst.ended);
 
@@ -440,6 +455,7 @@ export async function activate(id) {
 // ---- mount / unmount ----
 
 export async function mount(sessionId) {
+  mounted = true;
   $('btn-back').onclick = () => {
     window.location.hash = '#/';
   };
@@ -495,7 +511,11 @@ function onVisible() {
 }
 
 export function unmount() {
-  for (const inst of [...tabs.values()]) dispose(inst);
+  mounted = false;
+  for (const inst of [...tabs.values()]) {
+    clearAttention(inst.id);
+    dispose(inst);
+  }
   activeId = null;
   liveOrder = [];
   if (resizeObserver) {

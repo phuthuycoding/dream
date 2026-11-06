@@ -101,7 +101,7 @@ test('sidebar switches back home via back button; sessions stay live', async ({
   expect((await getSession(daemon.baseUrl, daemon.token, a.id)).status).toBe('Live');
 });
 
-test('bell flags the sidebar item; attaching clears it', async ({
+test('bell flags the sidebar item', async ({
   context,
   daemon,
 }) => {
@@ -128,7 +128,7 @@ test('reduced motion collapses transitions', async ({ context, daemon }) => {
 
   await page.emulateMedia({ reducedMotion: 'reduce' });
   const duration = await page.evaluate(
-    () => getComputedStyle(document.querySelector('#view-terminal')!).transitionDuration,
+    () => getComputedStyle(document.querySelector('#view-terminal')!).animationDuration,
   );
   expect(parseFloat(duration)).toBeLessThan(0.02);
 });

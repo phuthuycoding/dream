@@ -10,6 +10,7 @@
 </head>
 <body>
   <header id="topbar">
+    <button id="btn-side" class="btn ghost" title="Sessions" aria-label="toggle sessions sidebar">&#9776;</button>
     <span id="brand"><img src="/icon.svg" alt="" width="16" height="16" />dream</span>
     <span class="spacer"></span>
     <button id="btn-logout" class="btn ghost" title="Forget the stored token">log out</button>
@@ -38,7 +39,7 @@
         </div>
       </div>
     </aside>
-    <div id="side-backdrop" class="hidden"></div>
+    <div id="side-backdrop"></div>
 
     <main id="main">
       <!-- Auth gate: shown when there is no usable token (FR-007). -->
@@ -64,7 +65,6 @@
       <!-- Terminal: fullscreen xterm on attach. -->
       <section id="view-terminal" class="view hidden">
         <div id="term-header">
-          <button id="btn-side" class="btn ghost" title="Sessions" aria-label="toggle sessions sidebar">&#9776;</button>
           <button id="btn-back" class="btn ghost">&larr; back</button>
           <span id="term-title" class="term-title"></span>
           <span id="term-status" class="pill"></span>

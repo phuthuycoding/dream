@@ -48,6 +48,9 @@ function sessionCard(session) {
   const activeRoute = /^#\/s\/([0-9a-fA-F-]+)$/.exec(window.location.hash);
   card.className = `session-card${dead ? ' is-dead' : ''}${activeRoute && activeRoute[1] === session.id ? ' active' : ''}`;
   card.dataset.sessionId = session.id;
+  card.tabIndex = 0;
+  card.setAttribute('role', 'button');
+  card.setAttribute('aria-label', `attach ${session.name}`);
 
   const head = document.createElement('div');
   head.className = 'session-head';
@@ -156,9 +159,13 @@ function sessionCard(session) {
 
   // Clicking the item attaches — every interactive child stops
   // propagation before this can fire. On touch the drawer closes.
-  card.addEventListener('click', () => {
+  const attach = () => {
     window.location.hash = `#/s/${session.id}`;
     document.getElementById('shell').classList.remove('side-open');
+  };
+  card.addEventListener('click', attach);
+  card.addEventListener('keydown', (ev) => {
+    if (ev.key === 'Enter' && ev.target === card) attach();
   });
   return card;
 }
@@ -179,7 +186,11 @@ async function refresh() {
   render();
 }
 
+let lastRenderedJson = '';
 function render() {
+  const json = JSON.stringify(sessions);
+  if (json === lastRenderedJson) return;
+  lastRenderedJson = json;
   const list = $('session-list');
   list.replaceChildren();
   for (const session of sessions) {
@@ -262,8 +273,8 @@ export async function mount() {
   $('modal').onclick = (ev) => {
     if (ev.target === $('modal')) closeModal();
   };
-  window.addEventListener('hashchange', onHashChange);
   await refresh();
+  window.addEventListener('hashchange', onHashChange);
   pollTimer = setInterval(() => {
     refresh().catch((err) => {
       if (!(err instanceof AuthError)) console.warn('poll failed:', err);
@@ -271,9 +282,13 @@ export async function mount() {
   }, POLL_MS);
 }
 
-// Route changes re-mark the sidebar's active item immediately.
+// Route changes re-mark the sidebar's active item without a rebuild.
 function onHashChange() {
-  render();
+  const m = /^#\/s\/([0-9a-fA-F-]+)$/.exec(window.location.hash);
+  const activeId = m ? m[1] : null;
+  for (const card of $('session-list').children) {
+    card.classList.toggle('active', card.dataset.sessionId === activeId);
+  }
 }
 
 export function unmount() {

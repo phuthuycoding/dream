@@ -15,6 +15,7 @@ const VIEWS = ['view-gate', 'view-home', 'view-terminal'];
 
 let active = null; // 'terminal' | null
 let dashAlive = false; // sidebar mounted + polling
+let dashMounting = false; // mount in flight — drop must not leak it
 let authed = false;
 let navGen = 0;
 let navQueue = Promise.resolve();
@@ -35,10 +36,21 @@ function showGate(message) {
 }
 
 async function ensureDashboard() {
-  if (dashAlive) return;
-  $('sidebar').classList.remove('hidden');
-  await dashboard.mount();
-  dashAlive = true;
+  if (dashAlive || dashMounting) return;
+  dashMounting = true;
+  try {
+    $('sidebar').classList.remove('hidden');
+    await dashboard.mount();
+    if (authed) {
+      dashAlive = true;
+    } else {
+      // logout landed mid-mount — undo it
+      dashboard.unmount();
+      $('sidebar').classList.add('hidden');
+    }
+  } finally {
+    dashMounting = false;
+  }
 }
 
 function dropDashboard() {
@@ -70,7 +82,18 @@ async function applyRoute() {
     return;
   }
   const match = /^#\/s\/([0-9a-fA-F-]+)$/.exec(window.location.hash);
-  await ensureDashboard();
+  try {
+    await ensureDashboard();
+  } catch (err) {
+    $('sidebar').classList.add('hidden');
+    if (err instanceof AuthError) {
+      authed = false;
+      showGate(err.message);
+    } else {
+      console.warn('dashboard mount failed:', err);
+    }
+    return;
+  }
   if (match && active === 'terminal') {
     // Session switch inside the mounted view — no teardown, no replay.
     try {
