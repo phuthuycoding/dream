@@ -137,7 +137,7 @@ fn decoding_rejects_unknown_opcodes_and_empty_frames() {
 /// ASSUMED constructor — one place to fix when the real signature lands
 /// (same choke point as `src/http/tests.rs`).
 fn build_app(data_dir: &Path) -> axum::Router {
-    crate::http::routes::build_router(data_dir.to_path_buf(), TOKEN.to_string())
+    crate::http::routes::build_router(data_dir.to_path_buf(), TOKEN.to_string(), None)
 }
 
 async fn spawn_server(data_dir: &Path) -> String {

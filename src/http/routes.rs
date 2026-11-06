@@ -6,14 +6,15 @@
 
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use axum::{
     body::Bytes,
     extract::{
         ws::WebSocketUpgrade,
-        Path, State,
+        Path, Query, State,
     },
-    http::StatusCode,
+    http::{header, HeaderMap, HeaderValue, StatusCode},
     middleware,
     response::{IntoResponse, Response},
     routing::{get, post},
@@ -21,6 +22,8 @@ use axum::{
 };
 use serde::Deserialize;
 
+use crate::auth::oauth::{self, GithubOauth};
+use crate::auth::session::{SessionSigner, SESSION_COOKIE};
 use crate::model::{Session, Status};
 use crate::runtime::{RuntimeManager, DEFAULT_IDLE_ATTENTION};
 use crate::state::registry::Registry;
@@ -28,12 +31,18 @@ use crate::state::registry::Registry;
 use crate::http::{middleware::require_token, static_files};
 
 /// Shared router state: where sessions live, the token that gates access,
-/// and the lifecycle manager the mutation/attach routes delegate to.
+/// the lifecycle manager the mutation/attach routes delegate to, and —
+/// when the operator configured GitHub OAuth — the client that runs the
+/// login flow plus the signer minting `dream_session` cookies.
 #[derive(Clone)]
 pub struct AppState {
     pub data_dir: PathBuf,
     pub token: String,
     pub runtime: Arc<RuntimeManager>,
+    /// `None` keeps the bearer token as the only gate.
+    pub oauth: Option<Arc<GithubOauth>>,
+    /// Present exactly when `oauth` is — mints and verifies session cookies.
+    pub sessions: Option<Arc<SessionSigner>>,
 }
 
 /// Standalone entry point (tests): builds its own manager. The daemon
@@ -41,22 +50,36 @@ pub struct AppState {
 /// `RuntimeManager` — the manager that ran `resurrect_all` and the
 /// enforcer must be the one the routes spawn/attach through, or two
 /// monitor sets would track the same sessions.
-pub fn build_router(data_dir: PathBuf, token: String) -> Router {
+pub fn build_router(data_dir: PathBuf, token: String, oauth: Option<Arc<GithubOauth>>) -> Router {
     let runtime = Arc::new(RuntimeManager::new(data_dir.clone(), DEFAULT_IDLE_ATTENTION));
-    build_router_with(runtime, data_dir, token)
+    build_router_with(runtime, data_dir, token, oauth)
 }
 
 pub fn build_router_with(
     runtime: Arc<RuntimeManager>,
     data_dir: PathBuf,
     token: String,
+    oauth: Option<Arc<GithubOauth>>,
 ) -> Router {
+    // The signer exists only to serve the oauth flow: minting the
+    // callback's cookie and letting the middleware verify it.
+    let sessions = oauth.as_ref().map(|_| {
+        Arc::new(
+            SessionSigner::load_or_generate(&data_dir)
+                .expect("session key must load or generate under the data dir"),
+        )
+    });
     let state = AppState {
         runtime,
         data_dir,
         token,
+        oauth,
+        sessions,
     };
     Router::new()
+        .route("/auth/github", get(github_login_start))
+        .route("/auth/callback", get(github_login_callback))
+        .route("/auth/logout", post(logout))
         .route("/api/sessions", get(list_sessions).post(create_session))
         .route(
             "/api/sessions/{id}",
@@ -256,4 +279,162 @@ async fn ws_attach(
         }
         Err(err) => err.into_response(),
     }
+}
+
+// ---------------------------------------------------------------
+// GitHub OAuth login flow.
+// ---------------------------------------------------------------
+
+/// How long a minted `dream_session` stays valid — the cookie's Max-Age
+/// and the signed expiry are set to the same window.
+const SESSION_TTL_SECS: u64 = 60 * 60 * 24 * 7;
+
+/// `GET /auth/github` — start the login: mint a CSRF state, carry it in
+/// the `dream_oauth_state` cookie and on the authorize redirect so the
+/// callback can prove the browser that started the flow is the one
+/// returning from GitHub.
+async fn github_login_start(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    let Some(oauth) = &state.oauth else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    let csrf = oauth::generate_state();
+    let location = oauth.build_authorize_url(&callback_uri(&headers), &csrf);
+    // HttpOnly: no script ever reads the CSRF token. SameSite=Lax: the
+    // cookie still rides the top-level navigation back from GitHub.
+    // Max-Age=600 caps the window a started login can complete in.
+    let state_cookie = format!(
+        "{}={csrf}; HttpOnly; SameSite=Lax; Max-Age=600; Path=/",
+        oauth::STATE_COOKIE
+    );
+    redirect_with_cookies(&location, &[state_cookie])
+}
+
+#[derive(Deserialize)]
+struct CallbackParams {
+    code: Option<String>,
+    state: Option<String>,
+}
+
+/// `GET /auth/callback` — GitHub sent the browser back with a `code` and
+/// the echoed `state`. Verify the state against the cookie, exchange the
+/// code for an access token, check the login (or an org membership)
+/// against the allowlist, then mint `dream_session` and send the browser
+/// to the dashboard. Denial is 403 with no cookie; a state mismatch is
+/// 400. The consumed state cookie is cleared on every outcome.
+async fn github_login_callback(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(params): Query<CallbackParams>,
+) -> Response {
+    let (Some(oauth), Some(signer)) = (&state.oauth, &state.sessions) else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    let clear_state = clear_cookie(oauth::STATE_COOKIE);
+    let reject = |status: StatusCode| match set_cookie_headers(std::slice::from_ref(&clear_state)) {
+        Some(headers) => (status, headers).into_response(),
+        None => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+    };
+    let (Some(code), Some(query_state)) = (params.code, params.state) else {
+        return reject(StatusCode::BAD_REQUEST);
+    };
+    let Some(cookie_state) = crate::http::middleware::cookie_value(&headers, oauth::STATE_COOKIE)
+    else {
+        return reject(StatusCode::BAD_REQUEST);
+    };
+    if query_state != cookie_state {
+        return reject(StatusCode::BAD_REQUEST);
+    }
+
+    let redirect_uri = callback_uri(&headers);
+    let access_token = match oauth.exchange_code(&code, &redirect_uri).await {
+        Ok(token) => token,
+        Err(err) => return internal(err).into_response(),
+    };
+    let login = match oauth.fetch_login(&access_token).await {
+        Ok(login) => login,
+        Err(err) => return internal(err).into_response(),
+    };
+    let orgs = match oauth.fetch_orgs(&access_token).await {
+        Ok(orgs) => orgs,
+        Err(err) => return internal(err).into_response(),
+    };
+    if !oauth::is_allowlisted(&oauth.allowlist, &login, &orgs) {
+        return reject(StatusCode::FORBIDDEN);
+    }
+
+    let expires = now_unix() + SESSION_TTL_SECS;
+    let session = format!(
+        "{SESSION_COOKIE}={}; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age={SESSION_TTL_SECS}",
+        signer.mint(&login, expires)
+    );
+    redirect_with_cookies("/", &[session, clear_state])
+}
+
+/// `POST /auth/logout` — expire `dream_session`. The middleware whitelists
+/// it by path: clearing a cookie has no CSRF surface, and a stale or
+/// absent credential must not lock a client out of logging out.
+async fn logout() -> Response {
+    redirect_with_cookies("/", &[clear_cookie(SESSION_COOKIE)])
+}
+
+/// `http://<host>/auth/callback` rebuilt from the request's Host header —
+/// the daemon is cleartext HTTP only (operators front it with a tunnel
+/// for TLS), so the scheme is fixed.
+fn callback_uri(headers: &HeaderMap) -> String {
+    let host = headers
+        .get(header::HOST)
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or_default();
+    format!("http://{host}/auth/callback")
+}
+
+/// A Set-Cookie a client reads as "drop this cookie": empty value +
+/// Max-Age=0, matching the attributes the cookie was set with.
+fn clear_cookie(name: &str) -> String {
+    format!("{name}=; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=0")
+}
+
+fn now_unix() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
+}
+
+/// 302 with a Location plus one Set-Cookie per entry — axum's `Redirect`
+/// has no FOUND constructor and no way to attach cookies.
+fn redirect_with_cookies(location: &str, cookies: &[String]) -> Response {
+    let mut headers = match set_cookie_headers(cookies) {
+        Some(headers) => headers,
+        None => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+    };
+    match HeaderValue::from_str(location) {
+        Ok(value) => {
+            headers.insert(header::LOCATION, value);
+            (StatusCode::FOUND, headers).into_response()
+        }
+        Err(err) => {
+            tracing::error!("cannot build Location header value: {err}");
+            StatusCode::INTERNAL_SERVER_ERROR.into_response()
+        }
+    }
+}
+
+/// One `Set-Cookie` header per entry. `None` when a value cannot become
+/// a header — built internally, so a failure is a bug to surface as
+/// 500, not a response to ship half-empty.
+fn set_cookie_headers(cookies: &[String]) -> Option<HeaderMap> {
+    let mut headers = HeaderMap::new();
+    for cookie in cookies {
+        match HeaderValue::from_str(cookie) {
+            Ok(value) => {
+                headers.append(header::SET_COOKIE, value);
+            }
+            Err(err) => {
+                tracing::error!("cannot build Set-Cookie header value: {err}");
+                return None;
+            }
+        }
+    }
+    Some(headers)
 }
