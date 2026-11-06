@@ -23,6 +23,10 @@ final class ProfileStoreTests: XCTestCase {
             try store.delete(id)
         }
         createdProfileIDs.removeAll()
+        // `delete` is not required to clear the pointer under every
+        // implementation — reset it so a stale id never leaks into the
+        // next test's fresh store.
+        store.activeProfileId = nil
         purgeIssuedTokensFromKeychain()
         store = nil
         try super.tearDownWithError()
@@ -34,7 +38,7 @@ final class ProfileStoreTests: XCTestCase {
         let profile = makeProfile(name: "mac-studio")
         let token = issueToken()
 
-        try store.save(profile, token: token)
+        try saveAndTrack(profile, token: token)
 
         guard let listed = store.profiles.first(where: { $0.id == profile.id }) else {
             return XCTFail("saved profile must appear in the profile list")
@@ -51,7 +55,7 @@ final class ProfileStoreTests: XCTestCase {
     func testSavedProfileSurvivesANewStoreInstance() throws {
         let profile = makeProfile(name: "home-server")
         let token = issueToken()
-        try store.save(profile, token: token)
+        try saveAndTrack(profile, token: token)
 
         let reloaded = ProfileStore()
         XCTAssertTrue(
@@ -67,7 +71,7 @@ final class ProfileStoreTests: XCTestCase {
     func testTokenIsNeverPersistedOutsideKeychain() throws {
         let profile = makeProfile(name: "vps")
         let token = issueToken()
-        try store.save(profile, token: token)
+        try saveAndTrack(profile, token: token)
 
         XCTAssertFalse(
             userDefaultsContains(token),
@@ -90,8 +94,8 @@ final class ProfileStoreTests: XCTestCase {
     func testSwitchingActiveProfileMovesPointerAndKeepsBothProfiles() throws {
         let first = makeProfile(name: "first")
         let second = makeProfile(name: "second")
-        try store.save(first, token: issueToken())
-        try store.save(second, token: issueToken())
+        try saveAndTrack(first, token: issueToken())
+        try saveAndTrack(second, token: issueToken())
 
         store.activeProfileId = first.id
         XCTAssertEqual(store.activeProfileId, first.id)
@@ -112,12 +116,12 @@ final class ProfileStoreTests: XCTestCase {
 
     func testUpdatingProfileReplacesItsKeychainToken() throws {
         let profile = makeProfile(name: "old-name")
-        try store.save(profile, token: issueToken())
+        try saveAndTrack(profile, token: issueToken())
 
         let newToken = issueToken()
         var edited = profile
         edited.name = "new-name"
-        try store.save(edited, token: newToken)
+        try saveAndTrack(edited, token: newToken)
 
         XCTAssertEqual(store.token(for: profile.id), newToken)
         XCTAssertTrue(keychainContains(newToken))
@@ -131,9 +135,9 @@ final class ProfileStoreTests: XCTestCase {
     func testDeletingProfileRemovesKeychainTokenAndUnlistsIt() throws {
         let doomed = makeProfile(name: "doomed")
         let token = issueToken()
-        try store.save(doomed, token: token)
+        try saveAndTrack(doomed, token: token)
         let survivor = makeProfile(name: "survivor")
-        try store.save(survivor, token: issueToken())
+        try saveAndTrack(survivor, token: issueToken())
         store.activeProfileId = doomed.id
 
         try store.delete(doomed.id)
@@ -160,6 +164,16 @@ final class ProfileStoreTests: XCTestCase {
             name: name,
             baseURL: URL(string: "http://192.168.1.5:4020")!
         )
+    }
+
+    /// Saves a profile and records it for teardown deletion. Tracked by
+    /// id so re-saving an edited profile doesn't schedule a second delete
+    /// of an already-removed profile.
+    private func saveAndTrack(_ profile: DaemonProfile, token: String) throws {
+        try store.save(profile, token: token)
+        if !createdProfileIDs.contains(profile.id) {
+            createdProfileIDs.append(profile.id)
+        }
     }
 
     private func issueToken() -> String {
