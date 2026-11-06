@@ -1,0 +1,3 @@
+## UC-001 Browse the home view and create/attach a session
+
+Owner opens the app past the gate and lands on the home view instead of a bare grid: a compact page head (title + count, a prominent `#btn-new`, quick actions refresh/clean-all) above a full-width list of session rows rendered as `.session-card[data-session-id]` with `.session-name`, `.badge`, `.session-meta` including last-active and a `cmd · cwd` sub-line, plus the existing action buttons (attach/edit/kill/respawn/clean/delete) shown dim until hover/focus. With no sessions, `#dashboard-empty` shows guidance toward creating the first one. Clicking a row or `attach` routes to `#/s/<id>` and adds the session to the tab strip. (FR-001, FR-003, FR-004)

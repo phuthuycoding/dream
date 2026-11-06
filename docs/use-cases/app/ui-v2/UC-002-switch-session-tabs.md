@@ -1,0 +1,3 @@
+## UC-002 Switch between attached sessions via the tab strip
+
+With two or more sessions open, the terminal view shows a browser-style tab strip — one tab per session with name, live status dot, attention marker and a close control, ending in a "+" tab that navigates home. Clicking a tab sets `location.hash = '#/s/<id>'`; the router stays mounted on the terminal view and `terminal.js` swaps the visible per-tab xterm container, so the switched session's screen is exactly where it was — no replay, no remount. The open-tab list persists in `localStorage` (`dream.tabs`) and is restored across reloads, with background tabs attaching lazily on first activation. (FR-002)
