@@ -22,7 +22,7 @@
 | Requirement | FR-001 |
 | Use case | UC-001 |
 | Test type | Unit |
-| Purpose | `/auth/github` redirect URL carries client_id, redirect_uri, scope, random state; state cookie set |
+| Purpose | `/auth/github` redirect URL carries client_id, redirect_uri, random state (and `scope=read:org` only when the allowlist has an `org:` entry); state cookie set |
 
 ## TC-004 callback exchange + session
 | Field | Value |

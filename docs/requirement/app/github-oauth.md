@@ -13,7 +13,7 @@ The daemon gates `/api/*` and the WS attach on a single static bearer token past
 - Config: `--github-client-id`, `--github-client-secret`, `--github-allowlist` flags with `DREAM_GITHUB_CLIENT_ID` / `DREAM_GITHUB_CLIENT_SECRET` / `DREAM_GITHUB_ALLOWLIST` env fallbacks
 - `GET /auth/github` → 302 to github.com/login/oauth/authorize with client_id, redirect_uri, CSRF `state`
 - `GET /auth/callback` → verify `state`, exchange `code` for access token, fetch user identity + orgs, check allowlist, set session cookie, redirect to `/`
-- Session cookie `dream_session`: HMAC-signed `login|expiry`, HttpOnly, Secure, SameSite=Lax, Max-Age ~30d; signing key generated once, persisted mode 0600 in the data dir
+- Session cookie `dream_session`: HMAC-signed `login|expiry`, HttpOnly, SameSite=Lax, Max-Age ~30d; `Secure` appended only when the effective scheme is https (`X-Forwarded-Proto: https`) so cleartext binds do not have the cookie dropped; signing key generated once, persisted mode 0600 in the data dir
 - Allowlist: comma-separated GitHub logins and `org:NAME` entries; non-allowlisted identities get 403
 - Gate view: "Sign in with GitHub" button when OAuth is configured; logout button clears the cookie via `POST /auth/logout`
 - Auth middleware accepts session cookie OR bearer token OR `?token=` on the WS attach route (unchanged)
@@ -38,7 +38,7 @@ The daemon gates `/api/*` and the WS attach on a single static bearer token past
 ## Functional Requirements
 
 ### FR-001
-- Requirement: GitHub OAuth login flow — the OAuth App's client_id/secret are configured server-side via env/flags; `GET /auth/github` redirects to `https://github.com/login/oauth/authorize` with a crypto-random `state`; `GET /auth/callback` verifies `state`, exchanges the `code` for an access token, fetches the user's identity, and sets a `dream_session` cookie (HttpOnly, Secure, SameSite=Lax, ~30d) that the middleware accepts on `/api/*` and the WS upgrade.
+- Requirement: GitHub OAuth login flow — the OAuth App's client_id/secret are configured server-side via env/flags; `GET /auth/github` redirects to `https://github.com/login/oauth/authorize` with a crypto-random `state`; `GET /auth/callback` verifies `state`, exchanges the `code` for an access token, fetches the user's identity, and sets a `dream_session` cookie (HttpOnly, SameSite=Lax, ~30d; `Secure` only under an https front) that the middleware accepts on `/api/*` and the WS upgrade.
 - Priority: must
 
 ### FR-002
@@ -66,7 +66,7 @@ The daemon gates `/api/*` and the WS attach on a single static bearer token past
 - [ ] a non-allowlisted GitHub identity gets 403 and no cookie; `org:` entries admit org members
 - [ ] gate view renders "Sign in with GitHub"; logout clears the cookie and returns to the gate
 - [ ] `curl -H "Authorization: Bearer $TOKEN"` and WS `?token=` attach still pass; existing cargo + playwright suites green
-- [ ] tampered/expired cookie → 401; `state` mismatch on callback → 400/403
+- [ ] tampered/expired cookie → 401; `state` missing/mismatch on callback → 400 (403 is reserved for allowlist denial)
 
 ## Test Strategy
 - Level: full (unit for cookie mint/verify, allowlist match, authorize URL, cli/env parse; integration for callback + middleware with a stub GitHub server; E2E for the gate button + bearer regression)
@@ -75,11 +75,11 @@ The daemon gates `/api/*` and the WS attach on a single static bearer token past
 - Coverage: ≥80% lines (inherited gate)
 
 ## Edge cases
-- OAuth not configured (no client id/secret) → `/auth/*` 404s and the gate shows only the token field; daemon behaves exactly as today
+- OAuth not configured (no client id/secret) → `/auth/github` and `/auth/callback` 404, `/auth/mode` returns `{"github":false}` (the gate shows only the token field), and `/auth/logout` still clears `dream_session`; the token path behaves exactly as today
 - `--github-allowlist` empty while OAuth configured → refuse to start (would lock everyone out or let everyone in — both wrong)
-- GitHub unreachable or code exchange fails → callback 502/friendly gate error, no cookie
+- GitHub unreachable or code exchange fails → callback 500 `internal error` (state cookie cleared, no session cookie; browser stays on `/auth/callback` — retry by clicking sign-in again)
 - `state` mismatch / missing / reused → 400; the short-lived state cookie is cleared on the callback regardless of outcome
 - expired or tampered `dream_session` → treated as absent → gate view
 - WS upgrade carries the cookie automatically (same-origin); browser clients need no `?token=` once logged in
-- cookie set over plain loopback HTTP with `Secure` — localhost is a trustworthy origin in modern browsers; Safari on a bare LAN IP may drop it (documented; bearer fallback covers it)
+- cookie over plain HTTP omits `Secure` (browsers, incl. Safari on localhost, would drop a `Secure` cookie over cleartext — the historical login loop); `Secure` is emitted only when the front terminates TLS and sends `X-Forwarded-Proto: https`
 - daemon restart must keep sessions valid → signing key is persisted in the data dir, not regenerated per boot
