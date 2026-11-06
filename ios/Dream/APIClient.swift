@@ -82,14 +82,6 @@ final class APIClient {
         try await send("POST", url: sessionURL(id, action: "clean")) as Void
     }
 
-    /// `POST /api/logs/clean` — resets every session's replay log.
-    func cleanAllLogs() async throws {
-        try await send("POST", url: baseURL
-            .appendingPathComponent("api")
-            .appendingPathComponent("logs")
-            .appendingPathComponent("clean")) as Void
-    }
-
     // MARK: - Plumbing
 
     private func sessionsURL() -> URL {
