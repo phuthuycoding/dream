@@ -12,6 +12,9 @@
 //! (credentials + allowlist only); `From` fills in the github.com
 //! defaults.
 
+use std::fmt;
+use std::time::Duration;
+
 use anyhow::Context;
 use serde::Deserialize;
 
@@ -20,7 +23,7 @@ pub const STATE_COOKIE: &str = "dream_oauth_state";
 
 /// GitHub OAuth app credentials, the allowlist of who may log in, and
 /// the three GitHub endpoints the flow talks to.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct GithubOauth {
     pub client_id: String,
     pub client_secret: String,
@@ -30,6 +33,20 @@ pub struct GithubOauth {
     pub token_url: String,
     /// API base — `/user` and `/user/orgs` are appended to it.
     pub api_url: String,
+}
+
+// Manual Debug so a stray `{:?}` in logs cannot leak the client secret.
+impl fmt::Debug for GithubOauth {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("GithubOauth")
+            .field("client_id", &self.client_id)
+            .field("client_secret", &"<redacted>")
+            .field("allowlist", &self.allowlist)
+            .field("authorize_url", &self.authorize_url)
+            .field("token_url", &self.token_url)
+            .field("api_url", &self.api_url)
+            .finish()
+    }
 }
 
 impl From<crate::config::GithubOauth> for GithubOauth {
@@ -127,9 +144,11 @@ impl GithubOauth {
     }
 
     fn client(&self) -> reqwest::Client {
-        // GitHub rejects API calls without a User-Agent.
+        // GitHub rejects API calls without a User-Agent; the 10 s total
+        // timeout keeps a wedged endpoint from hanging the callback.
         reqwest::Client::builder()
             .user_agent("dream")
+            .timeout(Duration::from_secs(10))
             .build()
             .expect("reqwest client builds with a static user agent")
     }

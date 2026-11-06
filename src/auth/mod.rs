@@ -396,6 +396,22 @@ mod tests {
     }
 
     #[test]
+    fn a_session_cookie_with_a_multibyte_signature_is_rejected() {
+        let data = TempDir::new().expect("tempdir");
+        let signer = SessionSigner::load_or_generate(data.path()).expect("signer");
+
+        // The signature is attacker input: multi-byte UTF-8 at an even
+        // byte length must be rejected, not panic the hex decoder.
+        for bad in ["alice|1000|éé", "alice|1000|xéy"] {
+            assert_eq!(
+                signer.verify(bad, 500),
+                None,
+                "multibyte signature {bad:?} must be rejected"
+            );
+        }
+    }
+
+    #[test]
     fn a_cookie_signed_under_a_different_key_is_rejected() {
         let dir_a = TempDir::new().expect("tempdir");
         let dir_b = TempDir::new().expect("tempdir");

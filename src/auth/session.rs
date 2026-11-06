@@ -107,7 +107,9 @@ fn hex_encode(bytes: &[u8]) -> String {
 }
 
 fn hex_decode(hex: &str) -> Option<Vec<u8>> {
-    if !hex.len().is_multiple_of(2) {
+    // The signature is attacker-controlled: non-ASCII input would panic
+    // the byte-indexed slicing below by splitting a multi-byte char.
+    if !hex.is_ascii() || !hex.len().is_multiple_of(2) {
         return None;
     }
     (0..hex.len())
