@@ -38,6 +38,7 @@
 		1B0000000000000000000B42 /* ProfilesUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1B0000000000000000000B22 /* ProfilesUITests.swift */; };
 		1B0000000000000000000B43 /* SessionLifecycleUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1B0000000000000000000B23 /* SessionLifecycleUITests.swift */; };
 		1B0000000000000000000B44 /* TerminalUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1B0000000000000000000B24 /* TerminalUITests.swift */; };
+		1B0000000000000000000B45 /* AttentionUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1B0000000000000000000B25 /* AttentionUITests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -90,6 +91,7 @@
 		1B0000000000000000000B22 /* ProfilesUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProfilesUITests.swift; sourceTree = "<group>"; };
 		1B0000000000000000000B23 /* SessionLifecycleUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionLifecycleUITests.swift; sourceTree = "<group>"; };
 		1B0000000000000000000B24 /* TerminalUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TerminalUITests.swift; sourceTree = "<group>"; };
+		1B0000000000000000000B25 /* AttentionUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AttentionUITests.swift; sourceTree = "<group>"; };
 		1B0000000000000000000B06 /* DreamUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = DreamUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
@@ -176,6 +178,7 @@
 				1B0000000000000000000B22 /* ProfilesUITests.swift */,
 				1B0000000000000000000B23 /* SessionLifecycleUITests.swift */,
 				1B0000000000000000000B24 /* TerminalUITests.swift */,
+				1B0000000000000000000B25 /* AttentionUITests.swift */,
 			);
 			path = DreamUITests;
 			sourceTree = "<group>";
@@ -368,6 +371,7 @@
 				1B0000000000000000000B42 /* ProfilesUITests.swift in Sources */,
 				1B0000000000000000000B43 /* SessionLifecycleUITests.swift in Sources */,
 				1B0000000000000000000B44 /* TerminalUITests.swift in Sources */,
+				1B0000000000000000000B45 /* AttentionUITests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
