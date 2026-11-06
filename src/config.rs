@@ -35,7 +35,7 @@ impl Config {
         }
         if public && !bind.is_loopback() {
             eprintln!(
-                "WARNING: binding {bind} exposes webterm on a non-loopback interface. \
+                "WARNING: binding {bind} exposes dream on a non-loopback interface. \
                  Traffic is cleartext HTTP — the token and all terminal I/O \
                  are sniffable. Anyone reaching this address with the token \
                  gets a shell."
@@ -72,5 +72,5 @@ impl Config {
 pub fn default_data_dir() -> PathBuf {
     dirs::data_dir()
         .unwrap_or_else(|| PathBuf::from("."))
-        .join("webterm")
+        .join("dream")
 }

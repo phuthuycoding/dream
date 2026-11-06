@@ -6,7 +6,7 @@
 //! without a Cargo.toml change that belongs to the dev seat.
 //!
 //! Assumed surface (the dev pass reconciles — task-006-tests-report.md):
-//!   - `webterm::http::routes::build_router(data_dir: PathBuf, token: String)
+//!   - `dream::http::routes::build_router(data_dir: PathBuf, token: String)
 //!      -> axum::Router` builds the full app (REST + static + WS + middleware)
 //!   - WS attach lives at `GET /api/sessions/{id}/ws`, authed via `?token=`
 //!   - GET /api/sessions returns a bare JSON array of serialized `Session`s

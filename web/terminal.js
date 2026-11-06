@@ -60,7 +60,7 @@ function setStatus(text, cls) {
 function setTitle(attention) {
   const name = session ? session.name : 'terminal';
   $('term-title').textContent = name;
-  document.title = `${attention ? '● ' : ''}${name} — webterm`;
+  document.title = `${attention ? '● ' : ''}${name} — dream`;
 }
 
 // ---- wire encode/decode ----
@@ -390,6 +390,6 @@ export function unmount() {
     term = null;
   }
   if (session) clearAttention(session.id);
-  document.title = 'webterm';
+  document.title = 'dream';
   session = null;
 }

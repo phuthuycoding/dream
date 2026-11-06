@@ -1,4 +1,4 @@
-# webterm
+# dream
 
 Single-binary web terminal: real PTY sessions served over HTTP + WebSocket,
 built as a workbench for AI-agent CLIs. Sessions keep running when the
@@ -9,8 +9,8 @@ restart.
 
 ```sh
 cargo build --release
-# binary lands at target/release/webterm — copy it anywhere on PATH, e.g.
-cp target/release/webterm ~/.local/bin/
+# binary lands at target/release/dream — copy it anywhere on PATH, e.g.
+cp target/release/dream ~/.local/bin/
 ```
 
 No runtime dependencies; the dashboard frontend is embedded in the binary.
@@ -18,22 +18,37 @@ No runtime dependencies; the dashboard frontend is embedded in the binary.
 ## Run
 
 ```sh
-webterm                # listens on http://127.0.0.1:4020
-webterm --port 8080
+dream                # listens on http://127.0.0.1:4020
+dream --port 8080
 ```
 
-webterm binds loopback only by default. Binding anything else requires
+## Service commands (macOS + Linux)
+
+```
+dream up      # install + start the service (launchd agent / systemd --user)
+dream status  # show service state + token URL
+dream restart # restart the service
+dream logs    # show daemon logs (-f to follow)
+dream url     # reprint the token URL
+dream ps      # list sessions
+dream doctor  # diagnose: service, port, token, tailscale
+dream down    # stop + remove the service
+```
+
+Upgrading from `webterm`? The data dir moved to `~/Library/Application Support/dream` (`~/.local/share/dream` on Linux) — copy the old `webterm` dir over, or just re-open the printed URL once. `DREAM_AUTH_TOKEN` replaces `WEBTERM_AUTH_TOKEN`; the browser re-prompts the token.
+
+dream binds loopback only by default. Binding anything else requires
 `--public`, which prints a security warning — anyone who can reach the
 address *and* holds the token gets a shell on your machine.
 
 ## Auth flow
 
-- On **first run** webterm generates a random 64-char token, stores it at
+- On **first run** dream generates a random 64-char token, stores it at
   `<data-dir>/token` (mode `0600`), and prints the authenticated URL exactly
   once:
 
   ```
-  webterm ready — open this URL once to authenticate:
+  dream ready — open this URL once to authenticate:
     http://127.0.0.1:4020/?token=<token>
   ```
 
@@ -51,8 +66,8 @@ address *and* holds the token gets a shell on your machine.
 
 Default `<data-dir>` is the platform data dir (`--data-dir` overrides):
 
-- macOS: `~/Library/Application Support/webterm`
-- Linux: `~/.local/share/webterm`
+- macOS: `~/Library/Application Support/dream`
+- Linux: `~/.local/share/dream`
 
 ```
 <data-dir>/
@@ -86,7 +101,7 @@ from the built-in dashboard.
 
 ## Remote access via Tailscale
 
-webterm is loopback-only by default; reach it from other devices over your
+dream is loopback-only by default; reach it from other devices over your
 tailnet without exposing it publicly:
 
 ```sh
@@ -94,7 +109,7 @@ tailscale serve --bg 4020
 ```
 
 `tailscale serve` terminates TLS on the tailnet and proxies to
-`http://127.0.0.1:4020` — webterm is then reachable at
+`http://127.0.0.1:4020` — dream is then reachable at
 `https://<machine>.<tailnet>.ts.net/?token=<token>` from tailnet devices
 only. `tailscale` must be installed (`brew install tailscale` on macOS, or
 see https://tailscale.com/download) and logged in, and the tailnet's HTTPS
@@ -103,43 +118,7 @@ Certificates).
 
 ## Auto-start on macOS (launchd)
 
-Save as `~/Library/LaunchAgents/dev.webterm.plist`, adjusting the binary
-and log paths (launchd does not expand `~` — use absolute paths):
-
-```xml
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
-  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-  <key>Label</key>
-  <string>dev.webterm</string>
-  <key>ProgramArguments</key>
-  <array>
-    <string>/usr/local/bin/webterm</string>
-    <string>--port</string>
-    <string>4020</string>
-  </array>
-  <key>RunAtLoad</key>
-  <true/>
-  <key>KeepAlive</key>
-  <true/>
-  <key>StandardOutPath</key>
-  <string>/Users/<you>/Library/Logs/webterm.out.log</string>
-  <key>StandardErrorPath</key>
-  <string>/Users/<you>/Library/Logs/webterm.err.log</string>
-</dict>
-</plist>
-```
-
-```sh
-launchctl load ~/Library/LaunchAgents/dev.webterm.plist
-launchctl start dev.webterm
-```
-
-webterm prints the token URL once on first run to stdout, so keep these
-logs owner-private — `~/Library/Logs` is, a world-readable `/tmp` file is
-not.
+`dream up` does this automatically — recommended. Manual recipe for custom setups: the agent must be label `com.dream.daemon` for `dream down`/`status` to manage it; use `launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.dream.daemon.plist` (modern verbs — not `load`), with logs at `~/Library/Logs/dream/{out,err}.log`. Under launchd the token is never printed to the log — it lives in the 0600 token file (`<data-dir>/token`), printed once on a TTY first run or reprinted with `dream url`.
 
 ## CLI reference
 
@@ -157,11 +136,11 @@ not.
 
 ```sh
 cargo build --release
-(cd target/release && shasum -a 256 webterm) > webterm-<version>-<os>-<arch>.sha256
+(cd target/release && shasum -a 256 dream) > dream-<version>-<os>-<arch>.sha256
 ```
 
 Publish the binary and the `.sha256` side-by-side; consumers verify with
-`shasum -a 256 -c webterm-<version>-<os>-<arch>.sha256` run in the
-directory containing the `webterm` binary. The release profile
+`shasum -a 256 -c dream-<version>-<os>-<arch>.sha256` run in the
+directory containing the `dream` binary. The release profile
 strips symbols, enables LTO and `codegen-units = 1`, and optimizes for size
 (`opt-level = "z"`).

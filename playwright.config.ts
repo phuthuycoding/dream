@@ -1,6 +1,6 @@
 import { defineConfig } from '@playwright/test';
 
-// The daemon under test is the real ./target/debug/webterm binary — it is
+// The daemon under test is the real ./target/debug/dream binary — it is
 // spawned per test by e2e/helpers.ts on an ephemeral port with a throwaway
 // --data-dir, so no webServer block is needed here.
 export default defineConfig({

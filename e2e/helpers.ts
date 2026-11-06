@@ -1,5 +1,5 @@
 // helpers.ts — daemon lifecycle, REST client, and browser-side WS probing
-// for the webterm E2E suite.
+// for the dream E2E suite.
 //
 // Screen-content strategy: xterm renders through the WebGL/canvas addon, so
 // there is no `.xterm-rows` text layer to assert on. Instead every
@@ -18,7 +18,7 @@ import path from 'node:path';
 
 import base, { expect, BrowserContext, Page } from '@playwright/test';
 
-export const WEBTERM_BIN = path.resolve(__dirname, '..', 'target', 'debug', 'webterm');
+export const DREAM_BIN = path.resolve(__dirname, '..', 'target', 'debug', 'dream');
 
 // ---------------------------------------------------------------- daemon --
 
@@ -33,7 +33,7 @@ export interface Daemon {
 }
 
 export function mkDataDir(): string {
-  return mkdtempSync(path.join(tmpdir(), 'webterm-e2e-'));
+  return mkdtempSync(path.join(tmpdir(), 'dream-e2e-'));
 }
 
 export async function getFreePort(): Promise<number> {
@@ -85,7 +85,7 @@ export async function bootDaemon(opts: BootOptions = {}): Promise<Daemon> {
   const stdout: string[] = [];
   const stderr: string[] = [];
   const proc = spawn(
-    WEBTERM_BIN,
+    DREAM_BIN,
     ['--port', String(port), '--data-dir', dataDir, ...(opts.args ?? [])],
     { stdio: ['ignore', 'pipe', 'pipe'], cwd: opts.cwd },
   );
@@ -97,7 +97,7 @@ export async function bootDaemon(opts: BootOptions = {}): Promise<Daemon> {
   while (Date.now() < deadline) {
     if (proc.exitCode !== null) {
       throw new Error(
-        `webterm exited early (code ${proc.exitCode})\nstdout:\n${stdout.join('\n')}\nstderr:\n${stderr.join('\n')}`,
+        `dream exited early (code ${proc.exitCode})\nstdout:\n${stdout.join('\n')}\nstderr:\n${stderr.join('\n')}`,
       );
     }
     try {
@@ -120,7 +120,7 @@ export async function bootDaemon(opts: BootOptions = {}): Promise<Daemon> {
   }
   proc.kill('SIGKILL');
   throw new Error(
-    `webterm did not become ready within ${opts.timeoutMs ?? 15_000}ms\nstdout:\n${stdout.join('\n')}\nstderr:\n${stderr.join('\n')}`,
+    `dream did not become ready within ${opts.timeoutMs ?? 15_000}ms\nstdout:\n${stdout.join('\n')}\nstderr:\n${stderr.join('\n')}`,
   );
 }
 
@@ -201,7 +201,7 @@ export async function installAuthShim(context: BrowserContext, token: string): P
  *  `window.__ws`. Must be installed before the first navigation. */
 export async function instrumentWs(page: Page): Promise<void> {
   await page.addInitScript(() => {
-    const dec = new TextDecoder('latin1');
+    const dec = new TextDecoder('utf-8');
     const inbound: Uint8Array[] = [];
     const sent: Uint8Array[] = [];
     const NativeWS = window.WebSocket;

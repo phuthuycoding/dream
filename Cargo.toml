@@ -1,6 +1,6 @@
 [package]
-name = "webterm"
-version = "0.1.0"
+name = "dream"
+version = "1.0.0"
 edition = "2021"
 description = "Single-binary web terminal — AI-agent workbench over the browser"
 license = "MIT"

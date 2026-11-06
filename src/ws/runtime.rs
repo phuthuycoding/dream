@@ -426,6 +426,8 @@ async fn spawn(
     // The builder snapshots the daemon's whole environment; the auth
     // token must not leak into the shell's env or, via `env`/`export`
     // output, into the replay transcript.
+    cmd.env_remove("DREAM_AUTH_TOKEN");
+    // Pre-rename deployments may still export the old name.
     cmd.env_remove("WEBTERM_AUTH_TOKEN");
     // The header advertises xterm-256color; without these a pty child
     // launched under a minimal environment (launchd, systemd) has no
