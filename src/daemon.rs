@@ -701,30 +701,58 @@ pub fn doctor(cli: &Cli) -> anyhow::Result<()> {
     };
     checks.push((tok_ok, tok_msg));
 
-    // A wedged tailscaled must not hang the checklist — bound the probe
-    // and kill the probe process if it outlives the deadline.
+    // A wedged tailscaled must not hang the checklist: one shared deadline
+    // bounds every step, a failing binary moves on to the next candidate,
+    // and a probe that outlives the deadline has its process group killed
+    // so children of `tailscale status` cannot survive it.
+    enum Probe { Started(u32), Result(bool), Done }
     let (tx, rx) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
-        let bins = ["/opt/homebrew/bin/tailscale", "/usr/local/bin/tailscale", "/usr/bin/tailscale", "tailscale"];
-        for bin in bins {
-            if let Ok(mut child) = Command::new(bin).arg("status").spawn() {
-                let _ = tx.send(child.id());
+        for bin in ["/opt/homebrew/bin/tailscale", "/usr/local/bin/tailscale", "/usr/bin/tailscale", "tailscale"] {
+            let mut cmd = Command::new(bin);
+            cmd.arg("status");
+            #[cfg(unix)]
+            {
+                use std::os::unix::process::CommandExt;
+                cmd.process_group(0);
+            }
+            if let Ok(mut child) = cmd.spawn() {
+                let _ = tx.send(Probe::Started(child.id()));
                 let ok = child.wait().map(|s| s.success()).unwrap_or(false);
-                let _ = tx.send(ok as u32);
-                return;
+                let _ = tx.send(Probe::Result(ok));
+                if ok {
+                    return;
+                }
             }
         }
-        let _ = tx.send(u32::MAX);
+        let _ = tx.send(Probe::Done);
     });
-    let pid = rx.recv().unwrap_or(u32::MAX);
-    let ts_connected = if pid == u32::MAX {
-        false
-    } else {
-        match rx.recv_timeout(Duration::from_secs(3)) {
-            Ok(ok) => ok == 1,
-            Err(_) => {
-                let _ = Command::new("/bin/kill").arg(pid.to_string()).output();
-                false
+    let deadline = Instant::now() + Duration::from_secs(3);
+    let mut probe_pid = None;
+    let ts_connected = loop {
+        let left = deadline.saturating_duration_since(Instant::now());
+        if left.is_zero() {
+            break false;
+        }
+        match rx.recv_timeout(left) {
+            Ok(Probe::Started(pid)) => probe_pid = Some(pid),
+            Ok(Probe::Result(ok)) => {
+                if ok {
+                    break true;
+                }
+                probe_pid = None;
+            }
+            Ok(Probe::Done) | Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break false,
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                if let Some(pid) = probe_pid.take() {
+                    let grp = Command::new("/bin/kill")
+                        .args(["-TERM", "--", &format!("-{pid}")])
+                        .output();
+                    if grp.map(|o| !o.status.success()).unwrap_or(true) {
+                        let _ = Command::new("/bin/kill").args(["-TERM", &pid.to_string()]).output();
+                    }
+                }
+                break false;
             }
         }
     };
@@ -804,12 +832,17 @@ mod tests {
 
     #[test]
     fn systemd_unit_pins_env_path_and_escapes() {
-        let u = systemd_unit(&["/b".into(), "/p$HOME/x".into(), "a\\nb".to_string()], "sha").unwrap();
+        let u = systemd_unit(&["/b".into(), "/p$HOME/x".into()], "sha").unwrap();
         assert!(u.contains("Environment=PATH="));
-        assert!(u.contains("%h/.local/bin"));
+        // `%h` is a systemd specifier — it must stay a single %, so pin the
+        // full segment rather than a substring that %%h would also satisfy.
+        assert!(u.contains(":%h/.local/bin"));
+        assert!(!u.contains("%%h"));
         assert!(u.contains("/p$$HOME/x"));
-        // A literal backslash in the arg must survive as an escaped pair.
-        assert!(u.contains("a\\\\nb"));
+        // A literal backslash survives as an escaped pair — separate call so
+        // a validation change on it cannot mask the PATH asserts above.
+        let v = systemd_unit(&["/b".into(), "a\\nb".to_string()], "sha").unwrap();
+        assert!(v.contains("a\\\\nb"));
         // Real control characters are rejected outright.
         assert!(systemd_unit(&["/b".into(), "a\u{0007}b".into()], "sha").is_err());
         assert!(systemd_unit(&["/b".into(), "a\u{000a}b".into()], "sha").is_err());
