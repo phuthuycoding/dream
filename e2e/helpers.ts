@@ -75,6 +75,9 @@ export interface BootOptions {
   args?: string[];
   cwd?: string;
   timeoutMs?: number;
+  /** Env vars to drop from the spawned daemon (e.g. DREAM_GITHUB_* so a
+   *  runner's own config cannot silently enable a feature under test). */
+  unsetEnv?: string[];
 }
 
 /** Spawn the real binary; resolves once the token file exists and the port
@@ -84,10 +87,12 @@ export async function bootDaemon(opts: BootOptions = {}): Promise<Daemon> {
   const port = opts.port ?? (await getFreePort());
   const stdout: string[] = [];
   const stderr: string[] = [];
+  const env = { ...process.env };
+  for (const key of opts.unsetEnv ?? []) delete env[key];
   const proc = spawn(
     DREAM_BIN,
     ['--port', String(port), '--data-dir', dataDir, ...(opts.args ?? [])],
-    { stdio: ['ignore', 'pipe', 'pipe'], cwd: opts.cwd },
+    { stdio: ['ignore', 'pipe', 'pipe'], cwd: opts.cwd, env },
   );
   proc.stdout!.on('data', (d) => stdout.push(...String(d).split('\n')));
   proc.stderr!.on('data', (d) => stderr.push(...String(d).split('\n')));
@@ -347,10 +352,12 @@ export function sentResizePairs(page: Page): Promise<string[]> {
 
 /** Per-test daemon: fresh data dir + ephemeral port, killed and removed on
  *  teardown. Specs that manage the lifecycle themselves (restart test) boot
- *  manually instead. */
-export const test = base.extend<{ daemon: Daemon }>({
-  daemon: async ({}, use) => {
-    const d = await bootDaemon();
+ *  manually instead. `daemonOpts` is forwarded to bootDaemon — a spec or
+ *  describe block sets extra flags with `test.use({ daemonOpts: {...} })`. */
+export const test = base.extend<{ daemonOpts: BootOptions; daemon: Daemon }>({
+  daemonOpts: [{}, { option: true }],
+  daemon: async ({ daemonOpts }, use) => {
+    const d = await bootDaemon(daemonOpts);
     await use(d);
     await stopDaemon(d);
   },
