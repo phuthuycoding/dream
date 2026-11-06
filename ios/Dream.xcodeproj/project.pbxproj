@@ -27,10 +27,21 @@
 		1A0000000000000000000A58 /* SessionListView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A0000000000000000000A2B /* SessionListView.swift */; };
 		1A0000000000000000000A59 /* SessionFormView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A0000000000000000000A2C /* SessionFormView.swift */; };
 		1A0000000000000000000A5A /* TerminalPlaceholderView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A0000000000000000000A2D /* TerminalPlaceholderView.swift */; };
+		1B0000000000000000000B40 /* DreamUITestCase.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1B0000000000000000000B20 /* DreamUITestCase.swift */; };
+		1B0000000000000000000B41 /* PairingUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1B0000000000000000000B21 /* PairingUITests.swift */; };
+		1B0000000000000000000B42 /* ProfilesUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1B0000000000000000000B22 /* ProfilesUITests.swift */; };
+		1B0000000000000000000B43 /* SessionLifecycleUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1B0000000000000000000B23 /* SessionLifecycleUITests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
 		1A0000000000000000000A04 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 1A0000000000000000000A00 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 1A0000000000000000000A01;
+			remoteInfo = Dream;
+		};
+		1B0000000000000000000B04 /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
 			containerPortal = 1A0000000000000000000A00 /* Project object */;
 			proxyType = 1;
@@ -61,6 +72,11 @@
 		1A0000000000000000000A34 /* StubURLProtocol.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StubURLProtocol.swift; sourceTree = "<group>"; };
 		1A0000000000000000000A05 /* Dream.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Dream.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		1A0000000000000000000A06 /* DreamTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = DreamTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		1B0000000000000000000B20 /* DreamUITestCase.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DreamUITestCase.swift; sourceTree = "<group>"; };
+		1B0000000000000000000B21 /* PairingUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PairingUITests.swift; sourceTree = "<group>"; };
+		1B0000000000000000000B22 /* ProfilesUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProfilesUITests.swift; sourceTree = "<group>"; };
+		1B0000000000000000000B23 /* SessionLifecycleUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionLifecycleUITests.swift; sourceTree = "<group>"; };
+		1B0000000000000000000B06 /* DreamUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = DreamUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -79,6 +95,13 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		1B0000000000000000000B0C /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
@@ -87,6 +110,7 @@
 			children = (
 				1A0000000000000000000A08 /* Dream */,
 				1A0000000000000000000A09 /* DreamTests */,
+				1B0000000000000000000B09 /* DreamUITests */,
 				1A0000000000000000000A0A /* Products */,
 			);
 			sourceTree = "<group>";
@@ -124,11 +148,23 @@
 			path = DreamTests;
 			sourceTree = "<group>";
 		};
+		1B0000000000000000000B09 /* DreamUITests */ = {
+			isa = PBXGroup;
+			children = (
+				1B0000000000000000000B20 /* DreamUITestCase.swift */,
+				1B0000000000000000000B21 /* PairingUITests.swift */,
+				1B0000000000000000000B22 /* ProfilesUITests.swift */,
+				1B0000000000000000000B23 /* SessionLifecycleUITests.swift */,
+			);
+			path = DreamUITests;
+			sourceTree = "<group>";
+		};
 		1A0000000000000000000A0A /* Products */ = {
 			isa = PBXGroup;
 			children = (
 				1A0000000000000000000A05 /* Dream.app */,
 				1A0000000000000000000A06 /* DreamTests.xctest */,
+				1B0000000000000000000B06 /* DreamUITests.xctest */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -174,6 +210,24 @@
 			productReference = 1A0000000000000000000A06 /* DreamTests.xctest */;
 			productType = "com.apple.product-type.bundle.unit-test";
 		};
+		1B0000000000000000000B02 /* DreamUITests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 1B0000000000000000000B13 /* Build configuration list for PBXNativeTarget "DreamUITests" */;
+			buildPhases = (
+				1B0000000000000000000B10 /* Sources */,
+				1B0000000000000000000B0C /* Frameworks */,
+				1B0000000000000000000B0E /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				1B0000000000000000000B03 /* PBXTargetDependency */,
+			);
+			name = DreamUITests;
+			productName = DreamUITests;
+			productReference = 1B0000000000000000000B06 /* DreamUITests.xctest */;
+			productType = "com.apple.product-type.bundle.ui-testing";
+		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -188,6 +242,10 @@
 						CreatedOnToolsVersion = 16.0;
 					};
 					1A0000000000000000000A02 = {
+						CreatedOnToolsVersion = 16.0;
+						TestTargetID = 1A0000000000000000000A01;
+					};
+					1B0000000000000000000B02 = {
 						CreatedOnToolsVersion = 16.0;
 						TestTargetID = 1A0000000000000000000A01;
 					};
@@ -211,6 +269,7 @@
 			targets = (
 				1A0000000000000000000A01 /* Dream */,
 				1A0000000000000000000A02 /* DreamTests */,
+				1B0000000000000000000B02 /* DreamUITests */,
 			);
 		};
 /* End PBXProject section */
@@ -224,6 +283,13 @@
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 		1A0000000000000000000A0E /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		1B0000000000000000000B0E /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -266,6 +332,17 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		1B0000000000000000000B10 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				1B0000000000000000000B40 /* DreamUITestCase.swift in Sources */,
+				1B0000000000000000000B41 /* PairingUITests.swift in Sources */,
+				1B0000000000000000000B42 /* ProfilesUITests.swift in Sources */,
+				1B0000000000000000000B43 /* SessionLifecycleUITests.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXSourcesBuildPhase section */
 
 /* Begin PBXTargetDependency section */
@@ -273,6 +350,11 @@
 			isa = PBXTargetDependency;
 			target = 1A0000000000000000000A01 /* Dream */;
 			targetProxy = 1A0000000000000000000A04 /* PBXContainerItemProxy */;
+		};
+		1B0000000000000000000B03 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 1A0000000000000000000A01 /* Dream */;
+			targetProxy = 1B0000000000000000000B04 /* PBXContainerItemProxy */;
 		};
 /* End PBXTargetDependency section */
 
@@ -486,6 +568,44 @@
 			};
 			name = Release;
 		};
+		1B0000000000000000000005 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = "";
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.talabs.dream.uitests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 1;
+				TEST_TARGET_NAME = Dream;
+			};
+			name = Debug;
+		};
+		1B0000000000000000000006 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = "";
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.talabs.dream.uitests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 1;
+				TEST_TARGET_NAME = Dream;
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -512,6 +632,15 @@
 			buildConfigurations = (
 				1A0000000000000000000005 /* Debug */,
 				1A0000000000000000000006 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		1B0000000000000000000B13 /* Build configuration list for PBXNativeTarget "DreamUITests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				1B0000000000000000000005 /* Debug */,
+				1B0000000000000000000006 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
