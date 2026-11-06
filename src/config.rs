@@ -7,7 +7,7 @@ use anyhow::bail;
 
 use crate::cli::Cli;
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 #[allow(dead_code)] // fields are consumed by later tasks (auth, http, state)
 pub struct Config {
     pub port: u16,
@@ -18,6 +18,23 @@ pub struct Config {
     pub public: bool,
     pub log_cap: Option<u64>,
     pub log_max_age: Option<Duration>,
+}
+
+// Manual Debug so a `{:?}` on Config cannot leak the bearer token —
+// the same redaction GithubOauth applies to the client secret below.
+impl fmt::Debug for Config {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Config")
+            .field("port", &self.port)
+            .field("bind", &self.bind)
+            .field("data_dir", &self.data_dir)
+            .field("auth_token", &self.auth_token.as_ref().map(|_| "<redacted>"))
+            .field("github_oauth", &self.github_oauth)
+            .field("public", &self.public)
+            .field("log_cap", &self.log_cap)
+            .field("log_max_age", &self.log_max_age)
+            .finish()
+    }
 }
 
 /// GitHub OAuth app credentials plus the allowlist of who may log in.
@@ -47,6 +64,22 @@ impl fmt::Debug for GithubOauth {
 
 impl Config {
     pub fn load(cli: &Cli) -> anyhow::Result<Self> {
+        Self::load_inner(cli, true)
+    }
+
+    /// `load` for the local admin subcommands (status/restart/url/ps/
+    /// doctor): identical except the GitHub oauth config is not resolved.
+    /// Those commands only need port/bind/data-dir — resolving the oauth
+    /// settings would let a half-set DREAM_GITHUB_* in the operator's
+    /// shell break a read-only status check, and none of them consume
+    /// `github_oauth` anyway. Chosen over warn-and-continue because the
+    /// commands never look at the field, so skipping resolution is
+    /// strictly simpler than softening its errors.
+    pub fn load_admin(cli: &Cli) -> anyhow::Result<Self> {
+        Self::load_inner(cli, false)
+    }
+
+    fn load_inner(cli: &Cli, resolve_oauth: bool) -> anyhow::Result<Self> {
         let bind: IpAddr = cli
             .bind
             .as_deref()
@@ -74,7 +107,11 @@ impl Config {
             .map(PathBuf::from)
             .unwrap_or_else(default_data_dir);
         std::fs::create_dir_all(&data_dir)?;
-        let github_oauth = resolve_github_oauth(cli)?;
+        let github_oauth = if resolve_oauth {
+            resolve_github_oauth(cli)?
+        } else {
+            None
+        };
         Ok(Self {
             port: cli.port,
             bind,
@@ -136,17 +173,30 @@ fn resolve_github_oauth(cli: &Cli) -> anyhow::Result<Option<GithubOauth>> {
              set --github-allowlist or DREAM_GITHUB_ALLOWLIST"
         );
     }
-    // An `org:` entry with no name silently matches nobody — reject it
-    // like an empty allowlist, naming the offending entry. The prefix is
-    // matched case-insensitively (`ORG:` stays stored verbatim but its
-    // name must be non-empty too).
+    // `org:` is the only qualifier the matcher understands — and it
+    // strips exactly the lowercase prefix, so `ORG:acme` must be stored
+    // as `org:acme` or it never matches. The name is trimmed too
+    // (`org: acme` would otherwise compare against a leading-space name
+    // forever). An org entry with no name and a colon entry with any
+    // other prefix both match nobody — reject them loudly, naming the
+    // offending entry.
+    let mut normalized = Vec::with_capacity(allowlist.len());
     for entry in &allowlist {
-        if let Some((prefix, name)) = entry.split_once(':') {
-            if prefix.eq_ignore_ascii_case("org") && name.is_empty() {
-                bail!("github oauth allowlist entry {entry:?} has an empty org name");
+        match entry.split_once(':') {
+            Some((prefix, name)) if prefix.eq_ignore_ascii_case("org") => {
+                let name = name.trim();
+                if name.is_empty() {
+                    bail!("github oauth allowlist entry {entry:?} has an empty org name");
+                }
+                normalized.push(format!("org:{name}"));
             }
+            Some(_) => {
+                bail!("github oauth allowlist entry {entry:?} is not a login or org:name");
+            }
+            None => normalized.push(entry.clone()),
         }
     }
+    let allowlist = normalized;
     match (client_id, client_secret) {
         (Some(client_id), Some(client_secret)) => Ok(Some(GithubOauth {
             client_id,
@@ -447,5 +497,105 @@ mod tests {
                 "the error must name the offending entry {entry:?}, got: {err}"
             );
         }
+    }
+
+    #[test]
+    fn org_prefixed_entries_are_stored_lowercase_and_trimmed() {
+        let (_lock, _env) = clean_github_env();
+        let data = TempDir::new().expect("tempdir");
+
+        // `is_allowlisted` strips exactly `org:` — an uppercase prefix
+        // accepted at validation would match nobody, and a space between
+        // prefix and name would compare against a leading-space name.
+        let cfg = load_with(
+            &[
+                "--github-client-id",
+                "client-123",
+                "--github-client-secret",
+                "secret-xyz",
+                "--github-allowlist",
+                "alice,ORG:Acme,org: spaced",
+            ],
+            data.path(),
+        )
+        .expect("mixed-case and spaced org entries must load");
+
+        let oauth = cfg
+            .github_oauth
+            .expect("oauth flags must produce a configured GithubOauth");
+        assert_eq!(oauth.allowlist, ["alice", "org:Acme", "org:spaced"]);
+    }
+
+    #[test]
+    fn colon_entries_with_a_non_org_prefix_refuse_to_start() {
+        let (_lock, _env) = clean_github_env();
+        let data = TempDir::new().expect("tempdir");
+
+        // `foo:bar` is neither a bare login nor an org entry — stored
+        // verbatim it would silently match nobody, so it must fail loudly.
+        let result = load_with(
+            &[
+                "--github-client-id",
+                "client-123",
+                "--github-client-secret",
+                "secret-xyz",
+                "--github-allowlist",
+                "alice,foo:bar",
+            ],
+            data.path(),
+        );
+
+        let err = result.expect_err("a non-org colon entry must be a config error");
+        assert!(
+            err.to_string().contains("foo:bar"),
+            "the error must name the offending entry, got: {err}"
+        );
+    }
+
+    #[test]
+    fn config_debug_redacts_the_auth_token() {
+        let (_lock, _env) = clean_github_env();
+        let data = TempDir::new().expect("tempdir");
+
+        let cfg = load_with(&["--auth-token", "tok-secret-123"], data.path())
+            .expect("config must load");
+
+        let debug = format!("{cfg:?}");
+        assert!(
+            debug.contains("<redacted>"),
+            "auth_token must be redacted in Debug output: {debug}"
+        );
+        assert!(
+            !debug.contains("tok-secret-123"),
+            "the token must not appear in Debug output: {debug}"
+        );
+    }
+
+    #[test]
+    fn admin_load_ignores_partial_github_env_vars() {
+        let (_lock, _env) = clean_github_env();
+        // A half-set DREAM_GITHUB_* in the operator's shell must not break
+        // the read-only admin subcommands — they never consume the oauth
+        // config, so it is not resolved for them.
+        std::env::set_var("DREAM_GITHUB_CLIENT_ID", "env-id");
+        let data = TempDir::new().expect("tempdir");
+
+        let cli = Cli::try_parse_from([
+            "dream".to_string(),
+            "--data-dir".to_string(),
+            data.path().display().to_string(),
+        ])
+        .expect("args must parse");
+        let cfg = Config::load_admin(&cli).expect("admin load must ignore partial oauth env");
+
+        assert!(
+            cfg.github_oauth.is_none(),
+            "admin load must leave the oauth config unresolved"
+        );
+        // The daemon path still validates the same environment.
+        assert!(
+            Config::load(&cli).is_err(),
+            "a client id without a secret must stay a config error for the daemon"
+        );
     }
 }

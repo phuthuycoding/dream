@@ -427,6 +427,15 @@ pub fn up(cli: &Cli) -> anyhow::Result<()> {
             }
             fs::write(&plist, &new_xml)
                 .with_context(|| format!("cannot write {}", plist.display()))?;
+            // The plist can carry the oauth client secret in
+            // EnvironmentVariables — the default 0644 would leave it
+            // readable by every local user.
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                fs::set_permissions(&plist, std::fs::Permissions::from_mode(0o600))
+                    .with_context(|| format!("cannot restrict {}", plist.display()))?;
+            }
             let svc = service()?;
             let _ = launchctl(&["bootout", &svc]);
             launchctl(&["bootstrap", &format!("gui/{}", uid()?), &plist.display().to_string()])?;
@@ -445,6 +454,14 @@ pub fn up(cli: &Cli) -> anyhow::Result<()> {
             fs::create_dir_all(unit.parent().unwrap())?;
             fs::write(&unit, &new_unit)
                 .with_context(|| format!("cannot write {}", unit.display()))?;
+            // Same lockdown as the plist: the unit's Environment= lines
+            // can hold the oauth client secret.
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                fs::set_permissions(&unit, std::fs::Permissions::from_mode(0o600))
+                    .with_context(|| format!("cannot restrict {}", unit.display()))?;
+            }
             systemctl(&["daemon-reload"])?;
             let _ = systemctl(&["disable", "--now", "dream.service"]);
             systemctl(&["enable", "--now", "dream.service"])?;
@@ -561,7 +578,7 @@ pub fn status(cli: &Cli) -> anyhow::Result<()> {
         Platform::Linux => "dream.service",
     };
     println!("dream {unit_name}: state = {state}");
-    let cfg = Config::load(cli)?;
+    let cfg = Config::load_admin(cli)?;
     print_url(&cfg);
     match platform()? {
         Platform::Macos => println!("  logs: {}", log_dir()?.display()),
@@ -577,7 +594,7 @@ pub fn restart(cli: &Cli) -> anyhow::Result<()> {
         Platform::Linux => systemctl(&["restart", "dream.service"])?,
     }
     // Give the rebound port a moment to answer before reporting success.
-    let cfg = Config::load(cli)?;
+    let cfg = Config::load_admin(cli)?;
     let deadline = Instant::now() + Duration::from_secs(30);
     let p = platform()?;
     while Instant::now() < deadline {
@@ -634,7 +651,7 @@ pub fn logs(follow: bool) -> anyhow::Result<()> {
 
 /// `dream url` — reprint the token URL.
 pub fn url(cli: &Cli) -> anyhow::Result<()> {
-    let cfg = Config::load(cli)?;
+    let cfg = Config::load_admin(cli)?;
     match read_service_token(&cfg) {
         Some(token) => {
             println!("http://{}:{}/?token={token}", admin_host_display(&cfg), cfg.port);
@@ -649,7 +666,7 @@ pub fn url(cli: &Cli) -> anyhow::Result<()> {
 
 /// `dream ps` — list sessions via the local API using the token file.
 pub fn ps(cli: &Cli) -> anyhow::Result<()> {
-    let cfg = Config::load(cli)?;
+    let cfg = Config::load_admin(cli)?;
     let token = read_service_token(&cfg)
         .ok_or_else(|| anyhow!("no token file — is the daemon running? (dream status)"))?;
     let body = http_get(&cfg, "/api/sessions", &token)?;
@@ -712,7 +729,7 @@ fn http_get(cfg: &Config, path: &str, token: &str) -> anyhow::Result<String> {
 
 /// `dream doctor` — diagnostic checklist.
 pub fn doctor(cli: &Cli) -> anyhow::Result<()> {
-    let cfg = Config::load(cli)?;
+    let cfg = Config::load_admin(cli)?;
     let mut checks: Vec<(bool, String)> = Vec::new();
 
     let agent_state = match platform() {
