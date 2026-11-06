@@ -143,14 +143,19 @@ final class TerminalUITests: DreamUITestCase {
         terminal().typeText("c")
     }
 
-    /// TC-011 — drag gestures reach the terminal's scroll machinery and the
-    /// terminal keeps working afterwards. The viewport position itself is
-    /// NOT observable through XCUITest: SwiftTerm's scroll indicator reports
-    /// a stale "1 page"/0% regardless of scrollback size, and its thumb's
-    /// a11y frame flips once on the first gesture then never tracks
-    /// position. Inertia, freeze-while-scrolled, and auto-follow therefore
-    /// can't be asserted — this spec covers the observable part: scroll
-    /// gestures are delivered to the view and input/output keep working.
+    /// TC-011 (partial coverage) — covers only the observable third of the
+    /// test case: drag gestures are delivered to the terminal's scroll view
+    /// and input/output keep working afterwards.
+    ///
+    /// NOT covered here (unobservable via XCUITest — requires manual
+    /// verification): "new output while scrolled up leaves the view in
+    /// place" (freeze-while-scrolled) and "scrolling to the bottom resumes
+    /// auto-follow". The viewport position has no accessibility
+    /// representation: SwiftTerm's scroll indicator reports a stale
+    /// "1 page"/0% regardless of scrollback size, and its thumb's a11y
+    /// frame flips once on the first gesture then never tracks position
+    /// again (verified empirically with swipes, real drags, and idle waits).
+    /// Inertia is likewise unassertable.
     func testTouchScrollReachesViewportAndTerminalStaysFunctional() async throws {
         // The session command pre-fills scrollback, then drops to a shell.
         let session = try await daemon.createSession(
@@ -190,10 +195,17 @@ final class TerminalUITests: DreamUITestCase {
         )
     }
 
-    /// TC-012 — leaving the screen detaches only the socket: the daemon keeps
-    /// the session Live (verified via REST — the `dream ps` equivalent), and
-    /// reattaching succeeds on the same session with the replay source
-    /// intact and fresh input round-tripping.
+    /// TC-012 — leaving the screen must not kill the session, and
+    /// reattaching must restore it: after navigate-back the daemon still
+    /// reports the session Live (verified via REST — the `dream ps`
+    /// equivalent), re-attach reaches `.live` again, the replay source is
+    /// untouched, and fresh input round-trips on the same session.
+    ///
+    /// NOT covered here (unobservable today): that `onDisappear` actually
+    /// closed the client socket — the daemon broadcasts to all attached
+    /// clients and the session JSON exposes no ws-client count, so a broken
+    /// `detach()` would pass this spec. Manual verification or a daemon-side
+    /// attach-count signal would be needed.
     func testDetachKeepsSessionAliveAndReattachRestoresScrollback() async throws {
         let session = try await daemon.createSession(
             name: "terminal-reattach",
