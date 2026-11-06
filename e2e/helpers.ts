@@ -284,13 +284,15 @@ export async function attachTerminal(
 ): Promise<void> {
   await gotoAuthed(page, baseUrl, token, `#/s/${sessionId}`);
   await expect(page.locator('#view-terminal')).toBeVisible();
-  await expect(page.locator('.xterm')).toBeVisible();
+  // ui-v2 keep-alive tabs: background panes keep an (invisible) xterm —
+  // scope to the visible emulator or strict-mode clicks see two matches.
+  await expect(page.locator('.xterm:visible')).toBeVisible();
   await expect(page.locator('#term-status')).toHaveText('connected');
 }
 
 /** Type a command line into the focused xterm and press Enter. */
 export async function runInTerminal(page: Page, line: string): Promise<void> {
-  await page.locator('.xterm').click();
+  await page.locator('.xterm:visible').click();
   await page.keyboard.type(line);
   await page.keyboard.press('Enter');
 }

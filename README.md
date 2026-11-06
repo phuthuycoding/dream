@@ -99,6 +99,25 @@ from the built-in dashboard.
 - **Log retention**: `--log-cap` / `--log-max-age` bound replay logs; the
   enforcer trims or resets them every 60 s.
 
+## Web UI
+
+Flat, professional list UI (no framework, no build step — vanilla ES
+modules embedded in the binary).
+
+- **Home**: full-width session list — one row per session (icon, name,
+  `cmd · cwd`, created-time, status pill, row actions), guided empty
+  state, page head with create/refresh/clean-all.
+- **Sessions sidebar**: a persistent left sidebar lists every session —
+  status dot, name, `cmd · cwd`, attention dot, row actions; clicking
+  one attaches or switches the terminal in place. On mobile it becomes
+  a drawer (☰ in the topbar).
+- **Keep-alive terminals**: each attached session keeps its own
+  xterm + WebSocket in a hidden pane, so switching preserves screen
+  state with no replay. At most 6 terminals stay live — the
+  least-recently-used background instance is evicted and re-attaches
+  (with a replay) on next selection.
+- **Attention**: the bell/idle flag shows on the tab and the home row.
+
 ## Remote access via Tailscale
 
 dream is loopback-only by default; reach it from other devices over your

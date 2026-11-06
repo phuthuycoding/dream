@@ -43,29 +43,31 @@ function relTime(iso) {
 }
 
 function sessionCard(session) {
+  const dead = session.status === 'Dead';
   const card = document.createElement('div');
-  card.className = 'session-card';
+  const activeRoute = /^#\/s\/([0-9a-fA-F-]+)$/.exec(window.location.hash);
+  card.className = `session-card${dead ? ' is-dead' : ''}${activeRoute && activeRoute[1] === session.id ? ' active' : ''}`;
   card.dataset.sessionId = session.id;
+  card.tabIndex = 0;
+  card.setAttribute('role', 'button');
+  card.setAttribute('aria-label', `attach ${session.name}`);
 
   const head = document.createElement('div');
   head.className = 'session-head';
+  const statusDot = document.createElement('span');
+  statusDot.className = `status-dot ${session.resurrected ? 'resurrected' : session.status.toLowerCase()}`;
+  head.appendChild(statusDot);
+  const name = document.createElement('span');
+  name.className = 'session-name';
+  name.textContent = session.name;
+  name.title = session.name;
+  head.appendChild(name);
   if (hasAttention(session.id)) {
     const dot = document.createElement('span');
     dot.className = 'attention-dot';
     dot.title = 'attention';
     head.appendChild(dot);
   }
-  const name = document.createElement('span');
-  name.className = 'session-name';
-  name.textContent = session.name;
-  name.title = session.name;
-  name.addEventListener('click', () => {
-    window.location.hash = `#/s/${session.id}`;
-  });
-  head.appendChild(name);
-  const spacer = document.createElement('span');
-  spacer.className = 'spacer';
-  head.appendChild(spacer);
   head.appendChild(statusBadge(session));
   card.appendChild(head);
 
@@ -113,7 +115,7 @@ function sessionCard(session) {
   addRow('cmd', session.cmd, true);
   addRow('cwd', session.cwd, true);
   addRow('id', session.id.slice(0, 8), true, true, `${session.id} (click to copy)`);
-  addRow('created', relTime(session.created_at), false, false, session.created_at);
+  addRow('created', relTime(session.created_at), false, false, `created ${session.created_at}`);
   if (session.setup_script) addRow('setup', session.setup_script, true);
   card.appendChild(meta);
 
@@ -154,6 +156,17 @@ function sessionCard(session) {
     return undefined;
   });
   card.appendChild(actions);
+
+  // Clicking the item attaches — every interactive child stops
+  // propagation before this can fire. On touch the drawer closes.
+  const attach = () => {
+    window.location.hash = `#/s/${session.id}`;
+    document.getElementById('shell').classList.remove('side-open');
+  };
+  card.addEventListener('click', attach);
+  card.addEventListener('keydown', (ev) => {
+    if (ev.key === 'Enter' && ev.target === card) attach();
+  });
   return card;
 }
 
@@ -173,12 +186,17 @@ async function refresh() {
   render();
 }
 
+let lastRenderedJson = '';
 function render() {
+  const json = JSON.stringify(sessions);
+  if (json === lastRenderedJson) return;
+  lastRenderedJson = json;
   const list = $('session-list');
   list.replaceChildren();
   for (const session of sessions) {
     list.appendChild(sessionCard(session));
   }
+  $('session-count').textContent = String(sessions.length);
   $('dashboard-empty').classList.toggle('hidden', sessions.length > 0);
 }
 
@@ -240,6 +258,7 @@ async function submitModal(ev) {
 
 export async function mount() {
   $('btn-new').onclick = () => openModal(null);
+  $('btn-empty-new').onclick = () => openModal(null);
   $('btn-refresh').onclick = () => void refresh();
   $('btn-clean-all').onclick = () => {
     if (window.confirm("Reset every session's replay log?")) {
@@ -255,6 +274,7 @@ export async function mount() {
     if (ev.target === $('modal')) closeModal();
   };
   await refresh();
+  window.addEventListener('hashchange', onHashChange);
   pollTimer = setInterval(() => {
     refresh().catch((err) => {
       if (!(err instanceof AuthError)) console.warn('poll failed:', err);
@@ -262,10 +282,20 @@ export async function mount() {
   }, POLL_MS);
 }
 
+// Route changes re-mark the sidebar's active item without a rebuild.
+function onHashChange() {
+  const m = /^#\/s\/([0-9a-fA-F-]+)$/.exec(window.location.hash);
+  const activeId = m ? m[1] : null;
+  for (const card of $('session-list').children) {
+    card.classList.toggle('active', card.dataset.sessionId === activeId);
+  }
+}
+
 export function unmount() {
   if (pollTimer !== null) {
     clearInterval(pollTimer);
     pollTimer = null;
   }
+  window.removeEventListener('hashchange', onHashChange);
   closeModal();
 }
