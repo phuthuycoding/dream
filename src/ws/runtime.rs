@@ -427,8 +427,6 @@ async fn spawn(
     // token must not leak into the shell's env or, via `env`/`export`
     // output, into the replay transcript.
     cmd.env_remove("DREAM_AUTH_TOKEN");
-    // Pre-rename deployments may still export the old name.
-    cmd.env_remove("WEBTERM_AUTH_TOKEN");
     // The GitHub oauth config reaches the daemon via its environment
     // (launchd EnvironmentVariables / systemd Environment=) — the client
     // secret must not leak into a session's `env` output either.

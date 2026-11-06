@@ -1,5 +1,5 @@
 ---
-feature: "web-terminal"
+feature: "web-terminal" (shipped; file renamed to dream.md — feature name kept for history)
 context: "app"
 created: "20261105_1828"
 kind: feature
