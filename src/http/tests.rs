@@ -1031,6 +1031,71 @@ async fn logout_expires_the_session_cookie_without_requiring_auth() {
         );
     }
 
+    // Fetch Metadata: a browser POST declaring itself cross-site (or a
+    // `none` context) is refused before the cookie clear runs.
+    for site in ["cross-site", "none"] {
+        let resp = client
+            .post(format!("{base}/auth/logout"))
+            .header("sec-fetch-site", site)
+            .send()
+            .await
+            .expect("logout request");
+        assert_eq!(
+            resp.status(),
+            StatusCode::FORBIDDEN,
+            "sec-fetch-site {site} must be refused"
+        );
+    }
+    for site in ["same-origin", "same-site"] {
+        let resp = client
+            .post(format!("{base}/auth/logout"))
+            .header("sec-fetch-site", site)
+            .send()
+            .await
+            .expect("logout request");
+        assert!(
+            resp.status().is_success() || resp.status().is_redirection(),
+            "sec-fetch-site {site} must pass, got {}",
+            resp.status()
+        );
+        let cleared = set_cookies_named(&resp, "dream_session");
+        assert!(
+            cleared.iter().any(|header| clears_cookie(header)),
+            "a {site} logout must still expire the cookie, got {cleared:?}"
+        );
+    }
+
+    // Without Sec-Fetch-Site an Origin decides: it must equal this
+    // request's own scheme+host (`base` is exactly that authority).
+    let resp = client
+        .post(format!("{base}/auth/logout"))
+        .header("origin", base.as_str())
+        .send()
+        .await
+        .expect("logout request");
+    assert!(
+        resp.status().is_success() || resp.status().is_redirection(),
+        "a matching Origin must pass, got {}",
+        resp.status()
+    );
+    let cleared = set_cookies_named(&resp, "dream_session");
+    assert!(
+        cleared.iter().any(|header| clears_cookie(header)),
+        "an Origin-matched logout must still expire the cookie, got {cleared:?}"
+    );
+
+    let resp = client
+        .post(format!("{base}/auth/logout"))
+        .header("origin", "http://evil.example")
+        .send()
+        .await
+        .expect("logout request");
+    assert_eq!(
+        resp.status(),
+        StatusCode::FORBIDDEN,
+        "a foreign Origin must be refused"
+    );
+
     // Once the browser drops the expired cookie the API is gated again.
     let resp = client
         .get(format!("{base}/api/sessions"))

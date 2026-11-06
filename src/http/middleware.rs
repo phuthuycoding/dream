@@ -42,7 +42,9 @@ fn is_static_get(request: &Request) -> bool {
     request.method() == Method::GET && !request.uri().path().starts_with("/api/")
 }
 
-/// `POST /auth/logout` only expires `dream_session` — no CSRF surface.
+/// `POST /auth/logout` only expires `dream_session`; the exemption exists
+/// so a stale credential cannot lock a client out of logging out — the
+/// handler itself refuses cross-site browser POSTs.
 fn is_logout(request: &Request) -> bool {
     request.method() == Method::POST && request.uri().path() == "/auth/logout"
 }

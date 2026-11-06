@@ -6,7 +6,7 @@
 // Views live in dashboard.js / terminal.js; this module decides which is
 // mounted and whether the token gate stands in front (FR-007).
 
-import { adoptTokenFromUrl, getToken, setToken, clearToken, api, oauthMode, logout, AuthError } from './api.js';
+import { adoptTokenFromUrl, getToken, setToken, clearToken, api, oauthMode, logout, AuthError, bumpAuthEpoch, currentAuthEpoch } from './api.js';
 import * as dashboard from './dashboard.js';
 import * as terminal from './terminal.js';
 
@@ -137,6 +137,7 @@ async function applyRoute() {
 // satisfies it with no stored token, so a browser returning from the
 // GitHub callback skips the gate; a 401 means neither credential holds.
 async function tryAuth() {
+  bumpAuthEpoch(); // supersede every in-flight request from an older attempt
   const hadToken = Boolean(getToken());
   // No stored credential: paint the gate now rather than leaving a blank
   // page while the probe runs — a valid session cookie still upgrades.
@@ -184,8 +185,14 @@ function boot() {
     clearToken();
     authed = false;
     showGate();
-    // Best-effort cookie expiry: a failed POST still leaves the gate up.
-    void logout().catch((err) => console.warn('logout request failed:', err));
+    // Best-effort cookie expiry: a failed POST still leaves the gate up,
+    // but the server may still hold the session — say so on the gate.
+    void logout().catch((err) => {
+      console.warn('logout request failed:', err);
+      const errBox = $('gate-error');
+      errBox.textContent = 'logout may not have completed — the server may still hold your session';
+      errBox.classList.remove('hidden');
+    });
   });
   $('btn-side').addEventListener('click', () => {
     $('shell').classList.toggle('side-open');
@@ -194,7 +201,11 @@ function boot() {
     $('shell').classList.remove('side-open');
   });
   window.addEventListener('hashchange', () => void route());
-  window.addEventListener('dream:unauthorized', () => {
+  window.addEventListener('dream:unauthorized', (ev) => {
+    // The listener runs before the rejected call's catch, so `authed`
+    // cannot guard it: a 401 stamped with a superseded epoch must not
+    // tear down the session a newer auth already established.
+    if (ev.detail && ev.detail.epoch < currentAuthEpoch()) return;
     authed = false;
     showGate('session expired — paste the token again');
   });

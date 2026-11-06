@@ -34,6 +34,20 @@ export function clearToken() {
   localStorage.removeItem(TOKEN_KEY);
 }
 
+// Auth epoch: every auth attempt (tryAuth/gateSubmit in app.js) bumps it
+// and request() stamps the epoch it started under onto the 401 event, so
+// a rejection from a superseded attempt cannot tear down the session a
+// newer attempt already established — the navGen pattern, for auth.
+let authEpoch = 0;
+
+export function bumpAuthEpoch() {
+  authEpoch += 1;
+}
+
+export function currentAuthEpoch() {
+  return authEpoch;
+}
+
 // Pull `?token=` out of the URL into localStorage and remove it from the
 // address bar so it is not copied into links or left in history.
 export function adoptTokenFromUrl() {
@@ -46,19 +60,24 @@ export function adoptTokenFromUrl() {
 }
 
 async function request(path, { method = 'GET', body } = {}) {
+  const token = getToken();
+  const epoch = authEpoch;
   const resp = await fetch(path, {
     method,
     headers: {
-      Authorization: `Bearer ${getToken()}`,
+      Authorization: `Bearer ${token}`,
       ...(body !== undefined ? { 'Content-Type': 'application/json' } : {}),
     },
     body: body !== undefined ? JSON.stringify(body) : undefined,
   });
   if (resp.status === 401) {
-    clearToken();
+    // Clear only the credential that was actually rejected — a token
+    // pasted meanwhile belongs to a newer attempt and must survive.
+    if (getToken() === token) clearToken();
     // Listeners (app.js) drop back to the auth gate no matter which
-    // code path — poll, click, attach — surfaced the rejection.
-    window.dispatchEvent(new CustomEvent('dream:unauthorized'));
+    // code path — poll, click, attach — surfaced the rejection, unless
+    // the epoch stamped here was superseded by a newer auth.
+    window.dispatchEvent(new CustomEvent('dream:unauthorized', { detail: { epoch } }));
     throw new AuthError('unauthorized — token rejected or missing');
   }
   if (!resp.ok) {
