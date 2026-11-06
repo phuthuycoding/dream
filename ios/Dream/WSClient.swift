@@ -47,11 +47,18 @@ final class WSClient: NSObject {
     /// cannot set `Authorization` on the upgrade — and it is sent only
     /// when a token exists, never as an empty credential.
     static func attachURL(baseURL: URL, sessionID: String, token: String?) -> URL? {
-        guard var components = URLComponents(url: baseURL, resolvingAgainstBaseURL: false) else {
+        // Append like APIClient.sessionURL — a path-prefixed baseURL
+        // (daemon behind a reverse proxy at e.g. https://host/dream/)
+        // must keep its prefix or every attach misses the route.
+        let wsURL = baseURL
+            .appendingPathComponent("api")
+            .appendingPathComponent("sessions")
+            .appendingPathComponent(sessionID)
+            .appendingPathComponent("ws")
+        guard var components = URLComponents(url: wsURL, resolvingAgainstBaseURL: false) else {
             return nil
         }
         components.scheme = components.scheme == "https" ? "wss" : "ws"
-        components.path = "/api/sessions/\(sessionID)/ws"
         components.queryItems = nil
         components.fragment = nil
         if let token, !token.isEmpty {
