@@ -385,10 +385,40 @@ async fn github_login_callback(
 }
 
 /// `POST /auth/logout` — expire `dream_session`. The middleware whitelists
-/// it by path: clearing a cookie has no CSRF surface, and a stale or
-/// absent credential must not lock a client out of logging out.
-async fn logout(headers: HeaderMap) -> Response {
+/// it by path: a stale or absent credential must not lock a client out of
+/// logging out. The residual CSRF surface is a forced logout — a nuisance
+/// that exposes nothing — narrowed here by Fetch Metadata / `Origin`: a
+/// browser POST declaring itself cross-site is refused, while clients
+/// sending neither header (curl, other daemons) still pass.
+async fn logout(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    if !logout_same_site(&headers, &state.bind_addr) {
+        return StatusCode::FORBIDDEN.into_response();
+    }
     redirect_with_cookies("/", &[clear_cookie(SESSION_COOKIE, &headers)])
+}
+
+/// Browser evidence that a logout POST is ours. `Sec-Fetch-Site` decides
+/// when present — every browser fetch carries it; an `Origin` matching
+/// this request's own scheme+host is the fallback when it is absent.
+/// Both missing means a non-browser client, which passes: the accepted
+/// residual is a forced logout from a client that forges or omits these
+/// headers, which no cookie-only endpoint can fully prevent.
+fn logout_same_site(headers: &HeaderMap, bind_addr: &str) -> bool {
+    if let Some(site) = headers
+        .get("sec-fetch-site")
+        .and_then(|value| value.to_str().ok())
+    {
+        return site.eq_ignore_ascii_case("same-origin") || site.eq_ignore_ascii_case("same-site");
+    }
+    match headers
+        .get(header::ORIGIN)
+        .and_then(|value| value.to_str().ok())
+    {
+        Some(origin) => {
+            origin == format!("{}://{}", request_scheme(headers), request_host(headers, bind_addr))
+        }
+        None => true,
+    }
 }
 
 /// `GET /auth/mode` — public probe the gate fetches at bootstrap to decide

@@ -83,10 +83,13 @@ export async function oauthMode() {
 
 // `POST /auth/logout` expires the `dream_session` cookie server-side; the
 // response is a 302 to `/`, so this is a raw fetch, not `request()`'s JSON
-// path. A rejected request is non-fatal — the local token clear still
-// gates the UI — so callers only log it.
-export function logout() {
-  return fetch('/auth/logout', { method: 'POST' });
+// path. A non-2xx means the cookie survived — reject so the caller can
+// warn instead of letting the user believe the logout landed.
+export async function logout() {
+  const resp = await fetch('/auth/logout', { method: 'POST' });
+  if (!resp.ok) {
+    throw new ApiError(resp.status, `POST /auth/logout → ${resp.status}`);
+  }
 }
 
 export const api = {

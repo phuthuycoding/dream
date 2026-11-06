@@ -138,11 +138,17 @@ async function applyRoute() {
 // GitHub callback skips the gate; a 401 means neither credential holds.
 async function tryAuth() {
   const hadToken = Boolean(getToken());
+  // No stored credential: paint the gate now rather than leaving a blank
+  // page while the probe runs — a valid session cookie still upgrades.
+  if (!hadToken) showGate();
   try {
     await api.listSessions(); // a bad stored token gets 401'd
     authed = true;
     await route();
   } catch (err) {
+    // A newer attempt may already have authed; a stale probe failing now
+    // must not tear that session back down to the gate.
+    if (authed) return;
     if (err instanceof AuthError) {
       showGate(hadToken ? 'stored token rejected — paste the token again' : '');
     } else {
