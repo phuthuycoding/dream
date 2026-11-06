@@ -156,6 +156,79 @@ final class ProfileStoreTests: XCTestCase {
         )
     }
 
+    // MARK: - Duplicate-name rule
+
+    func testSameNameOnADifferentProfileIdIsADuplicate() {
+        let existing = makeProfile(name: "mac-studio")
+        let incoming = makeProfile(name: "mac-studio")
+
+        XCTAssertTrue(
+            ProfileStore.hasDuplicateName(incoming, among: [existing]),
+            "a second profile carrying an existing name must be flagged"
+        )
+    }
+
+    func testSameNameOnTheSameProfileIdIsNotADuplicate() {
+        let profile = makeProfile(name: "mac-studio")
+
+        XCTAssertFalse(
+            ProfileStore.hasDuplicateName(profile, among: [profile]),
+            "re-saving a profile under its own name must not self-collide"
+        )
+    }
+
+    func testDistinctNamesAreNotDuplicates() {
+        let existing = makeProfile(name: "mac-studio")
+        let incoming = makeProfile(name: "vps")
+
+        XCTAssertFalse(ProfileStore.hasDuplicateName(incoming, among: [existing]))
+    }
+
+    func testNamesDifferingOnlyInCaseAreNotDuplicates() {
+        let existing = makeProfile(name: "mac-studio")
+        let incoming = makeProfile(name: "Mac-Studio")
+
+        XCTAssertFalse(
+            ProfileStore.hasDuplicateName(incoming, among: [existing]),
+            "the name match is exact — case differs, the names are distinct"
+        )
+    }
+
+    func testSavingProfileUnderAnotherProfilesNameThrowsAndWritesNothing() throws {
+        let existing = makeProfile(name: "mac-studio")
+        try saveAndTrack(existing, token: issueToken())
+        let squatter = makeProfile(name: "mac-studio")
+        createdProfileIDs.append(squatter.id) // defensive — the save must not land
+
+        XCTAssertThrowsError(try store.save(squatter, token: issueToken())) { error in
+            XCTAssertEqual(
+                error as? ProfileError, .duplicateName("mac-studio"),
+                "the collision must surface as a duplicate-name error naming the clash"
+            )
+        }
+        XCTAssertFalse(
+            store.profiles.contains(where: { $0.id == squatter.id }),
+            "a rejected save must not list the squatter profile"
+        )
+    }
+
+    func testRenamingToAnotherProfilesNameThrowsAndKeepsTheOldName() throws {
+        let existing = makeProfile(name: "mac-studio")
+        try saveAndTrack(existing, token: issueToken())
+        let second = makeProfile(name: "vps")
+        try saveAndTrack(second, token: issueToken())
+
+        var renamed = second
+        renamed.name = "mac-studio"
+        XCTAssertThrowsError(try store.update(renamed)) { error in
+            XCTAssertEqual(error as? ProfileError, .duplicateName("mac-studio"))
+        }
+        XCTAssertEqual(
+            store.profiles.first(where: { $0.id == second.id })?.name, "vps",
+            "a rejected rename must leave the stored name untouched"
+        )
+    }
+
     // MARK: - Helpers
 
     private func makeProfile(name: String) -> DaemonProfile {
