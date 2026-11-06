@@ -194,6 +194,34 @@ see https://tailscale.com/download) and logged in, and the tailnet's HTTPS
 certificates feature must be enabled (admin console → DNS → HTTPS
 Certificates).
 
+## Mobile app
+
+A native iOS companion (`ios/`) that pairs with a running daemon and
+offers the session browser plus a full terminal attach on iPhone.
+Requires iOS 17+.
+
+- **Pairing**: run `dream url` on the daemon host and paste the printed
+  `…/?token=…` URL into the app's pairing form. The token is stored in
+  the iOS Keychain; several daemons can be saved as named profiles.
+- **Reachability**: the phone must be able to reach the daemon — a
+  non-loopback bind on the same LAN (`--bind`/`--public`, see the flag
+  table), or anywhere over your tailnet (see above).
+- **Build**: open `ios/Dream.xcodeproj` in Xcode, or from the repo root:
+
+  ```sh
+  xcodebuild -project ios/Dream.xcodeproj -scheme Dream \
+      -destination 'platform=iOS Simulator,name=iPhone 15' build
+  ```
+
+- **Attention**: a session flagging attention shows an orange dot on its
+  row and posts a local notification; tapping it opens that session's
+  terminal. Denying notification permission only mutes the banners —
+  the in-app dot keeps working.
+- **Limitations**: notifications are local and fire only while the app
+  is alive — foreground or the short iOS background grace window — so
+  they are driven by the app's ~15 s session poll, not a push channel.
+  A killed app cannot notify.
+
 ## Auto-start on macOS (launchd)
 
 `dream up` does this automatically — recommended. Manual recipe for custom setups: the agent must be label `com.dream.daemon` for `dream down`/`status` to manage it; use `launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.dream.daemon.plist` (modern verbs — not `load`), with logs at `~/Library/Logs/dream/{out,err}.log`. Under launchd the token is never printed to the log — it lives in the 0600 token file (`<data-dir>/token`), printed once on a TTY first run or reprinted with `dream url`.

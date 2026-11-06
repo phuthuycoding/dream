@@ -7,6 +7,7 @@ import SwiftUI
 /// profile-switch rebuild — closes only the socket; the session stays
 /// alive on the daemon.
 struct TerminalScreenView: View {
+    @Environment(AttentionCenter.self) private var attentionCenter
     @State private var controller: TerminalController
 
     init(
@@ -35,8 +36,18 @@ struct TerminalScreenView: View {
             .navigationTitle(controller.terminalTitle.isEmpty ? controller.session.name : controller.terminalTitle)
             .navigationBarTitleDisplayMode(.inline)
             .overlay { overlay }
-            .onAppear { controller.attach() }
-            .onDisappear { controller.detach() }
+            .onAppear {
+                // While this terminal is up its own attention edge is
+                // suppressed — the attach already acks the flag.
+                attentionCenter.foregroundedSessionID = controller.session.id
+                controller.attach()
+            }
+            .onDisappear {
+                if attentionCenter.foregroundedSessionID == controller.session.id {
+                    attentionCenter.foregroundedSessionID = nil
+                }
+                controller.detach()
+            }
     }
 
     @ViewBuilder

@@ -10,6 +10,7 @@ struct SessionListView: View {
     let client: APIClient
 
     @Environment(AppState.self) private var appState
+    @Environment(AttentionCenter.self) private var attentionCenter
     @Environment(\.scenePhase) private var scenePhase
 
     @State private var sessions: [DreamSession] = []
@@ -21,21 +22,55 @@ struct SessionListView: View {
     @State private var renameText = ""
     @State private var deleting: DreamSession?
     @State private var failure: String?
+    /// Notification-tap target — a pending item pushes its terminal.
+    @State private var deepLinked: DreamSession?
+    @State private var missingSessionNotice = false
 
     var body: some View {
         NavigationStack {
-            VStack(spacing: 0) {
-                if let banner {
-                    Label(banner, systemImage: "wifi.exclamationmark")
-                        .font(.footnote)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(8)
-                        .background(.yellow.opacity(0.2))
-                        .accessibilityIdentifier("sessions.banner")
+            decoratedContent
+                .alert("Session unavailable", isPresented: $missingSessionNotice) {
+                    Button("OK") {}
+                } message: {
+                    Text("The session no longer exists on \(profile.name).")
                 }
-                content
+                .navigationDestination(item: $deepLinked) { session in
+                    terminalScreen(for: session)
+                }
+                .onChange(of: attentionCenter.requestedSessionID) { _, _ in
+                    drainRequest()
+                }
+                .task(id: scenePhase) {
+                    guard scenePhase == .active else { return }
+                    await refresh()
+                    while !Task.isCancelled {
+                        do {
+                            try await Task.sleep(for: .seconds(15))
+                        } catch {
+                            // Cancellation — backgrounding or teardown stops the poll.
+                            return
+                        }
+                        await refresh()
+                    }
+                }
+        }
+    }
+
+    /// The list plus its toolbar, sheets, and alerts — a separate
+    /// expression so the full modifier chain stays type-checkable.
+    private var decoratedContent: some View {
+        VStack(spacing: 0) {
+            if let banner {
+                Label(banner, systemImage: "wifi.exclamationmark")
+                    .font(.footnote)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(8)
+                    .background(.yellow.opacity(0.2))
+                    .accessibilityIdentifier("sessions.banner")
             }
-            .navigationTitle(profile.name)
+            content
+        }
+        .navigationTitle(profile.name)
             .toolbar {
                 ToolbarItem(placement: .navigation) {
                     Button { showProfiles = true } label: {
@@ -82,20 +117,6 @@ struct SessionListView: View {
             } message: {
                 Text(failure ?? "")
             }
-            .task(id: scenePhase) {
-                guard scenePhase == .active else { return }
-                await refresh()
-                while !Task.isCancelled {
-                    do {
-                        try await Task.sleep(for: .seconds(15))
-                    } catch {
-                        // Cancellation — backgrounding or teardown stops the poll.
-                        return
-                    }
-                    await refresh()
-                }
-            }
-        }
     }
 
     @ViewBuilder
@@ -115,16 +136,7 @@ struct SessionListView: View {
         } else {
             List(sessions, id: \.id) { session in
                 NavigationLink {
-                    TerminalScreenView(
-                        session: session,
-                        client: client,
-                        baseURL: profile.baseURL,
-                        tokenProvider: { appState.token(for: profile.id) },
-                        // The `a` frame means the shell wants attention —
-                        // re-list so the row's dot is fresh on pop-back.
-                        onAttention: { Task { await refresh() } },
-                        onUnauthorized: { appState.handleUnauthorized(profileId: profile.id) }
-                    )
+                    terminalScreen(for: session)
                 } label: {
                     SessionRow(session: session)
                 }
@@ -167,6 +179,9 @@ struct SessionListView: View {
     private func refresh() async {
         do {
             sessions = try await client.listSessions()
+            // Feed the attention edge detector before anything drains a
+            // deep-link so the row snapshot it routes against is fresh.
+            attentionCenter.observe(sessions)
             banner = nil
         } catch APIError.unauthorized {
             appState.handleUnauthorized(profileId: profile.id)
@@ -177,6 +192,39 @@ struct SessionListView: View {
             banner = APIError.describe(error)
         }
         loaded = true
+        drainRequest()
+    }
+
+    /// The attach both row taps and notification taps build.
+    private func terminalScreen(for session: DreamSession) -> some View {
+        TerminalScreenView(
+            session: session,
+            client: client,
+            baseURL: profile.baseURL,
+            tokenProvider: { appState.token(for: profile.id) },
+            // The `a` frame means the shell wants attention —
+            // re-list so the row's dot is fresh on pop-back.
+            onAttention: { Task { await refresh() } },
+            onUnauthorized: { appState.handleUnauthorized(profileId: profile.id) }
+        )
+    }
+
+    /// A notification tap queued a session id: push its terminal when
+    /// the row still exists. A tap that raced the app's launch arrives
+    /// before the first list, so a miss re-lists once before the
+    /// dead-session notice.
+    private func drainRequest() {
+        guard let id = attentionCenter.consumeRequest() else { return }
+        Task {
+            if sessions.first(where: { $0.id == id }) == nil {
+                await refresh()
+            }
+            if let session = sessions.first(where: { $0.id == id }) {
+                deepLinked = session
+            } else {
+                missingSessionNotice = true
+            }
+        }
     }
 
     /// Mutations re-list afterwards so the rows always reflect the

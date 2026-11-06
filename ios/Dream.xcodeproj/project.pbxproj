@@ -32,6 +32,7 @@
 		1A0000000000000000000A5E /* TerminalController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A0000000000000000000A38 /* TerminalController.swift */; };
 		1A0000000000000000000A5F /* TerminalView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A0000000000000000000A39 /* TerminalView.swift */; };
 		1A0000000000000000000A60 /* TerminalScreenView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A0000000000000000000A3A /* TerminalScreenView.swift */; };
+		1A0000000000000000000A61 /* AttentionCenter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A0000000000000000000A3B /* AttentionCenter.swift */; };
 		1B0000000000000000000B40 /* DreamUITestCase.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1B0000000000000000000B20 /* DreamUITestCase.swift */; };
 		1B0000000000000000000B41 /* PairingUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1B0000000000000000000B21 /* PairingUITests.swift */; };
 		1B0000000000000000000B42 /* ProfilesUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1B0000000000000000000B22 /* ProfilesUITests.swift */; };
@@ -75,6 +76,7 @@
 		1A0000000000000000000A38 /* TerminalController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TerminalController.swift; sourceTree = "<group>"; };
 		1A0000000000000000000A39 /* TerminalView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TerminalView.swift; sourceTree = "<group>"; };
 		1A0000000000000000000A3A /* TerminalScreenView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TerminalScreenView.swift; sourceTree = "<group>"; };
+		1A0000000000000000000A3B /* AttentionCenter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AttentionCenter.swift; sourceTree = "<group>"; };
 		1A0000000000000000000A30 /* APIClientTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = APIClientTests.swift; sourceTree = "<group>"; };
 		1A0000000000000000000A31 /* DreamSessionDecodingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DreamSessionDecodingTests.swift; sourceTree = "<group>"; };
 		1A0000000000000000000A32 /* PairingURLParserTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PairingURLParserTests.swift; sourceTree = "<group>"; };
@@ -148,6 +150,7 @@
 				1A0000000000000000000A38 /* TerminalController.swift */,
 				1A0000000000000000000A39 /* TerminalView.swift */,
 				1A0000000000000000000A3A /* TerminalScreenView.swift */,
+				1A0000000000000000000A3B /* AttentionCenter.swift */,
 			);
 			path = Dream;
 			sourceTree = "<group>";
@@ -339,6 +342,7 @@
 				1A0000000000000000000A5E /* TerminalController.swift in Sources */,
 				1A0000000000000000000A5F /* TerminalView.swift in Sources */,
 				1A0000000000000000000A60 /* TerminalScreenView.swift in Sources */,
+				1A0000000000000000000A61 /* AttentionCenter.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
