@@ -21,6 +21,7 @@ const GITHUB_ENV_VARS = [
   'DREAM_GITHUB_CLIENT_ID',
   'DREAM_GITHUB_CLIENT_SECRET',
   'DREAM_GITHUB_ALLOWLIST',
+  'DREAM_AUTH_TOKEN',
 ];
 
 test.describe('daemon without oauth flags', () => {

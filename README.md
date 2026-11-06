@@ -92,7 +92,8 @@ second way in, enabled by registering an OAuth App:
 
 - **Allowlist grammar**: comma-separated entries. A bare `login`
   admits that GitHub user (case-insensitive); `org:name` admits any
-  member of that org. `org:` entries are why the authorize request
+  member of that org (membership checked against the user's
+  first 100 orgs from /user/orgs). `org:` entries are why the authorize request
   carries the `read:org` scope — the callback lists `/user/orgs` to
   check membership. A user who matches no entry gets `403`.
   Configuring any oauth value without a usable allowlist — or only
