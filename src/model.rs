@@ -33,3 +33,16 @@ pub struct Session {
     #[serde(default)]
     pub resurrected: bool,
 }
+
+/// A `Session` as the session API returns it: the persisted record plus
+/// the runtime-only `attention` flag. `Session` above is the on-disk
+/// schema and cannot grow the field, so `list`/`get` responses serialize
+/// through this view — `#[serde(flatten)]` keeps the JSON shape identical
+/// plus the one extra key, and the flag never reaches `session.json`.
+#[derive(Debug, Clone, Serialize)]
+pub struct SessionView {
+    #[serde(flatten)]
+    pub session: Session,
+    /// Live attention flag from `RuntimeManager`; never persisted.
+    pub attention: bool,
+}

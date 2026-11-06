@@ -150,7 +150,9 @@ from the built-in dashboard.
 - **Resurrect**: sessions alive when the daemon stopped come back on the
   next start (status `resurrected`).
 - **Attention**: a session flags attention on a bell in its output or after
-  30 s of output silence while detached; attaching clears it.
+  30 s of output silence while detached; attaching clears it. `GET
+  /api/sessions` and `GET /api/sessions/<id>` report it as `attention` —
+  runtime state only, never written to `session.json`.
 - **Setup script**: `setup_script` on create is queued as the PTY's first
   input line — use it for env setup, `cd`, or launching an agent CLI.
 - **Log retention**: `--log-cap` / `--log-max-age` bound replay logs; the

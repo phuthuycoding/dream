@@ -24,7 +24,7 @@ use serde::Deserialize;
 
 use crate::auth::oauth::{self, GithubOauth};
 use crate::auth::session::{SessionSigner, SESSION_COOKIE};
-use crate::model::{Session, Status};
+use crate::model::{Session, SessionView, Status};
 use crate::runtime::{RuntimeManager, DEFAULT_IDLE_ATTENTION};
 use crate::state::registry::Registry;
 
@@ -129,15 +129,29 @@ fn session_or_404(reg: &Registry, id: &str) -> ApiResult<Session> {
     reg.get(id).cloned().ok_or_else(|| not_found(id))
 }
 
-async fn list_sessions(State(state): State<AppState>) -> ApiResult<Json<Vec<Session>>> {
-    Ok(Json(registry(&state)?.list().to_vec()))
+/// The wire form of one session: the record plus its live attention
+/// flag from the runtime. Sessions with no runtime on this manager
+/// (never spawned, or a fresh daemon before resurrect) read `false`.
+fn session_view(state: &AppState, session: Session) -> SessionView {
+    let attention = state.runtime.attention(&session.id);
+    SessionView { session, attention }
+}
+
+async fn list_sessions(State(state): State<AppState>) -> ApiResult<Json<Vec<SessionView>>> {
+    Ok(Json(
+        registry(&state)?
+            .list()
+            .iter()
+            .map(|session| session_view(&state, session.clone()))
+            .collect(),
+    ))
 }
 
 async fn get_session(
     State(state): State<AppState>,
     Path(id): Path<String>,
-) -> ApiResult<Json<Session>> {
-    session_or_404(&registry(&state)?, &id).map(Json)
+) -> ApiResult<Json<SessionView>> {
+    session_or_404(&registry(&state)?, &id).map(|session| Json(session_view(&state, session)))
 }
 
 #[derive(Deserialize, Default)]
