@@ -102,12 +102,11 @@ fn systemd_unit(program_args: &[String]) -> anyhow::Result<String> {
         .map(|a| shell_quote(&a))
         .collect::<Vec<_>>()
         .join(" ");
+    let svc_path = format!("{SERVICE_PATH}:%h/.local/bin");
     Ok(format!(
         "[Unit]\nDescription=dream web terminal daemon\nAfter=network-online.target\n\n\
          [Service]\nEnvironment=PATH={svc_path}\nExecStart={exec}\nRestart=always\nRestartSec=3\n\n\
-         [Install]\nWantedBy=default.target\n",
-        svc_path = SERVICE_PATH.replace('~', "%h"),
-        exec = exec
+         [Install]\nWantedBy=default.target\n"
     ))
 }
 
@@ -135,7 +134,16 @@ fn xml_escape(s: &str) -> String {
 
 /// PATH the service's PTY children inherit — launchd/systemd start with a
 /// minimal PATH that misses /opt/homebrew/bin where the AI CLIs live.
-const SERVICE_PATH: &str = "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:~/.local/bin";
+const SERVICE_PATH: &str = "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin";
+
+/// SERVICE_PATH plus the user's own ~/.local/bin — launchd does not expand
+/// `~`, so the entry is expanded at plist-write time.
+fn service_path_expanded() -> String {
+    match home() {
+        Ok(h) => format!("{SERVICE_PATH}:{}/.local/bin", h.display()),
+        Err(_) => SERVICE_PATH.to_string(),
+    }
+}
 
 fn plist_xml(program_args: &[String], log_out: &str, log_err: &str) -> String {
     let args: String = program_args
@@ -172,7 +180,7 @@ fn plist_xml(program_args: &[String], log_out: &str, log_err: &str) -> String {
 "#,
         out = xml_escape(log_out),
         err = xml_escape(log_err),
-        svc_path = xml_escape(SERVICE_PATH),
+        svc_path = xml_escape(&service_path_expanded()),
     )
 }
 
@@ -225,7 +233,7 @@ fn admin_host_display(cfg: &Config) -> String {
 fn print_url(cfg: &Config) {
     match read_service_token(cfg) {
         Some(token) => println!("  http://{}:{}/?token={token}", admin_host_display(cfg), cfg.port),
-        None => println!("  (no token file at {} yet)", cfg.data_dir.display()),
+        None => println!("  (no token file at {} yet)", cfg.data_dir.join("token").display()),
     }
 }
 
@@ -242,6 +250,19 @@ fn service_active(p: Platform) -> bool {
         Platform::Linux => systemd_out(&["is-active", "dream.service"])
             .map(|o| o.status.success())
             .unwrap_or(false),
+    }
+}
+
+/// True when the unit file is at least as fresh as the binary it runs —
+/// a rebuilt binary with unchanged flags still needs a reinstall so the
+/// service runs the new code.
+fn unit_fresh_enough(unit_path: &std::path::Path, exe: &str) -> bool {
+    let unit_mt = fs::metadata(unit_path).and_then(|m| m.modified()).ok();
+    let exe_mt = fs::metadata(exe).and_then(|m| m.modified()).ok();
+    match (unit_mt, exe_mt) {
+        (Some(u), Some(b)) => u >= b,
+        (Some(_), None) => true,
+        (None, _) => false,
     }
 }
 
@@ -292,7 +313,8 @@ pub fn up(cli: &Cli) -> anyhow::Result<()> {
             let new_xml = plist_xml(&args, &logs.join("out.log").display().to_string(), &logs.join("err.log").display().to_string());
             // `up` is a daily command — when the unit text did not change,
             // leave a healthy running agent alone instead of killing its ptys.
-            let already = fs::read_to_string(&plist).map(|c| c == new_xml).unwrap_or(false);
+            let already = fs::read_to_string(&plist).map(|c| c == new_xml).unwrap_or(false)
+                && unit_fresh_enough(&plist, &args[0]);
             if already && service_active(Platform::Macos) {
                 println!("dream is already up — nothing to do");
                 print_url(&cfg);
@@ -307,7 +329,8 @@ pub fn up(cli: &Cli) -> anyhow::Result<()> {
         Platform::Linux => {
             let unit = systemd_unit_path()?;
             let new_unit = systemd_unit(&args)?;
-            let already = fs::read_to_string(&unit).map(|c| c == new_unit).unwrap_or(false);
+            let already = fs::read_to_string(&unit).map(|c| c == new_unit).unwrap_or(false)
+                && unit_fresh_enough(&unit, &args[0]);
             if already && service_active(Platform::Linux) {
                 println!("dream is already up — nothing to do");
                 print_url(&cfg);
@@ -433,8 +456,11 @@ pub fn restart(cli: &Cli) -> anyhow::Result<()> {
     // Give the rebound port a moment to answer before reporting success.
     let cfg = Config::load(cli)?;
     let deadline = Instant::now() + Duration::from_secs(30);
+    let p = platform()?;
     while Instant::now() < deadline {
-        if TcpStream::connect((admin_host(&cfg).as_str(), cfg.port)).is_ok() {
+        if service_active(p)
+            && TcpStream::connect((admin_host(&cfg).as_str(), cfg.port)).is_ok()
+        {
             println!("dream restarted");
             return Ok(());
         }
