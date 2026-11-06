@@ -124,6 +124,10 @@ struct PairingView: View {
         let probe = APIClient(baseURL: credentials.baseURL) { credentials.token }
         do {
             _ = try await probe.listSessions()
+        } catch APIError.unreachable(let error) {
+            errorMessage = Self.transportHint(baseURL: credentials.baseURL)
+                ?? APIError.describe(error)
+            return
         } catch {
             errorMessage = APIError.describe(error)
             return
@@ -182,6 +186,28 @@ struct PairingView: View {
         }
         guard !tokenText.isEmpty else { throw PairingURLError.missingToken }
         return (url, tokenText)
+    }
+
+    /// ATS exempts IP literals but not hostnames: a plain-http pairing
+    /// to `dreambox.home` or a tailnet name fails at the transport layer
+    /// with an opaque "cannot load resources" — name the real cause.
+    private static func transportHint(baseURL: URL) -> String? {
+        guard baseURL.scheme == "http",
+              let host = baseURL.host,
+              !isIPLiteral(host)
+        else { return nil }
+        return """
+        iOS requires https for named hosts — use the daemon's IP address \
+        or serve it over https (e.g. `tailscale serve`).
+        """
+    }
+
+    /// IPv4 dotted-quad or anything containing ':' (IPv6 literal).
+    private static func isIPLiteral(_ host: String) -> Bool {
+        if host.contains(":") { return true }
+        let octets = host.split(separator: ".")
+        return octets.count == 4
+            && octets.allSatisfy { $0.count <= 3 && UInt8($0) != nil }
     }
 
     private static func describe(_ error: PairingURLError) -> String {

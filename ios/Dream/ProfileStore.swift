@@ -1,5 +1,19 @@
 import Foundation
 
+/// Profile validation failures surfaced to the pairing/rename forms.
+enum ProfileError: Error, Equatable, LocalizedError {
+    /// Another profile already holds that name — profiles are named
+    /// user-facing labels, so a collision misleads.
+    case duplicateName(String)
+
+    var errorDescription: String? {
+        switch self {
+        case .duplicateName(let name):
+            return "A daemon named \"\(name)\" already exists — pick another name."
+        }
+    }
+}
+
 /// Persists daemon pairing profiles and their active pointer as JSON
 /// under Application Support. Bearer tokens are handled separately by
 /// `KeychainTokenStore` — only profile metadata ever reaches disk.
@@ -33,8 +47,10 @@ final class ProfileStore {
 
     /// Insert a new profile or update an existing one (matched by `id`);
     /// either way its Keychain token is written first so a metadata-only
-    /// failure never leaves a listed profile without credentials.
+    /// failure never leaves a listed profile without credentials. A name
+    /// another profile already uses is rejected before any write.
     func save(_ profile: DaemonProfile, token: String) throws {
+        try checkUniqueName(profile)
         try keychain.setToken(token, for: profile.id.uuidString)
         if let index = profiles.firstIndex(where: { $0.id == profile.id }) {
             profiles[index] = profile
@@ -46,12 +62,23 @@ final class ProfileStore {
 
     /// Update profile metadata without touching the Keychain token —
     /// rename has no new credential to write. Unknown ids are a no-op.
+    /// A name another profile already uses is rejected.
     func update(_ profile: DaemonProfile) throws {
         guard let index = profiles.firstIndex(where: { $0.id == profile.id }) else {
             return
         }
+        try checkUniqueName(profile)
         profiles[index] = profile
         try persist()
+    }
+
+    /// Profile names are the labels the user picks a daemon by — a
+    /// duplicate silently misidentifies the target. The profile's own
+    /// id is excluded so re-saving itself never self-collides.
+    private func checkUniqueName(_ profile: DaemonProfile) throws {
+        if profiles.contains(where: { $0.id != profile.id && $0.name == profile.name }) {
+            throw ProfileError.duplicateName(profile.name)
+        }
     }
 
     /// Drop a profile's Keychain token while keeping the profile — the

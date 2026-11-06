@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 /// Session browser for the active daemon — mirrors `web/dashboard.js`
 /// semantics: the list is the source of truth, every mutation re-lists,
@@ -18,6 +19,7 @@ struct SessionListView: View {
     @State private var banner: String?
     @State private var showCreate = false
     @State private var showProfiles = false
+    @State private var editing: DreamSession?
     @State private var renaming: DreamSession?
     @State private var renameText = ""
     @State private var deleting: DreamSession?
@@ -45,7 +47,13 @@ struct SessionListView: View {
                     // any refresh feeds it — a rebuilt list on profile
                     // switch re-primes the baseline.
                     attentionCenter.activeProfileID = profile.id
-                    guard scenePhase == .active else { return }
+                    guard scenePhase == .active else {
+                        // Leaving .active: one last refresh under a
+                        // background task so a flag raised during the
+                        // grace window still notifies.
+                        refreshInBackground()
+                        return
+                    }
                     await refresh()
                     while !Task.isCancelled {
                         do {
@@ -90,18 +98,35 @@ struct SessionListView: View {
                 }
             }
             .sheet(isPresented: $showCreate) {
-                SessionFormView { name, cmd, cwd in
+                SessionFormView { name, cmd, cwd, setupScript in
                     do {
-                        _ = try await client.createSession(name: name, cmd: cmd, cwd: cwd)
+                        _ = try await client.createSession(
+                            name: name, cmd: cmd, cwd: cwd, setupScript: setupScript
+                        )
                         await refresh()
-                    } catch APIError.unauthorized {
-                        appState.handleUnauthorized(profileId: profile.id)
-                        throw APIError.unauthorized
+                    } catch APIError.unauthorized(let token) {
+                        appState.handleUnauthorized(profileId: profile.id, rejectedToken: token)
+                        throw APIError.unauthorized(token: token)
                     }
                 }
             }
             .sheet(isPresented: $showProfiles) {
                 ProfileListView()
+            }
+            .sheet(item: $editing) { session in
+                // Edit form — PATCH never sends `cmd` (a command change
+                // implies a respawn, dashboard.js parity).
+                SessionFormView(editing: session) { name, _, cwd, setupScript in
+                    do {
+                        _ = try await client.updateSession(
+                            id: session.id, name: name, cwd: cwd, setupScript: setupScript
+                        )
+                        await refresh()
+                    } catch APIError.unauthorized(let token) {
+                        appState.handleUnauthorized(profileId: profile.id, rejectedToken: token)
+                        throw APIError.unauthorized(token: token)
+                    }
+                }
             }
             .alert("Rename session", isPresented: renamePresented, presenting: renaming) { session in
                 TextField("Name", text: $renameText)
@@ -150,6 +175,9 @@ struct SessionListView: View {
                     lifecycleButton(session)
                 }
                 .contextMenu {
+                    Button("Edit") {
+                        editing = session
+                    }
                     Button("Rename") {
                         renaming = session
                         renameText = session.name
@@ -180,6 +208,23 @@ struct SessionListView: View {
         }
     }
 
+    /// One refresh inside a `UIBackgroundTask` — iOS grants a short
+    /// window, enough for the list (and any raised attention flag) to
+    /// land before the app is fully suspended. The task ends when the
+    /// refresh returns.
+    private func refreshInBackground() {
+        var taskID = UIBackgroundTaskIdentifier.invalid
+        taskID = UIApplication.shared.beginBackgroundTask {
+            UIApplication.shared.endBackgroundTask(taskID)
+            taskID = .invalid
+        }
+        Task {
+            await refresh()
+            UIApplication.shared.endBackgroundTask(taskID)
+            taskID = .invalid
+        }
+    }
+
     private func refresh() async {
         do {
             sessions = try await client.listSessions()
@@ -187,8 +232,8 @@ struct SessionListView: View {
             // deep-link so the row snapshot it routes against is fresh.
             attentionCenter.observe(sessions, for: profile.id)
             banner = nil
-        } catch APIError.unauthorized {
-            appState.handleUnauthorized(profileId: profile.id)
+        } catch APIError.unauthorized(let token) {
+            appState.handleUnauthorized(profileId: profile.id, rejectedToken: token)
             return
         } catch APIError.unreachable(let error) {
             banner = "Daemon unreachable — \(error.localizedDescription)"
@@ -209,7 +254,11 @@ struct SessionListView: View {
             // The `a` frame means the shell wants attention —
             // re-list so the row's dot is fresh on pop-back.
             onAttention: { Task { await refresh() } },
-            onUnauthorized: { appState.handleUnauthorized(profileId: profile.id) }
+            onUnauthorized: { token in
+                appState.handleUnauthorized(profileId: profile.id, rejectedToken: token)
+            },
+            // A 404 attach means the row is stale — re-list so it drops.
+            onSessionGone: { Task { await refresh() } }
         )
     }
 
@@ -238,8 +287,8 @@ struct SessionListView: View {
             do {
                 try await action()
                 await refresh()
-            } catch APIError.unauthorized {
-                appState.handleUnauthorized(profileId: profile.id)
+            } catch APIError.unauthorized(let token) {
+                appState.handleUnauthorized(profileId: profile.id, rejectedToken: token)
             } catch {
                 failure = APIError.describe(error)
             }

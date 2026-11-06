@@ -4,7 +4,7 @@ import Foundation
 /// serde wire names (`created_at`, `log_path`, `setup_script`), the
 /// `"Live"/"Dead"/"Resurrected"` status values, and an `attention` flag
 /// that older daemons omit entirely — hence the default-false decode.
-struct DreamSession: Codable, Equatable, Hashable, Sendable {
+struct DreamSession: Codable, Equatable, Hashable, Sendable, Identifiable {
     var id: String
     var name: String
     var cmd: String
