@@ -1,14 +1,11 @@
 ---
-feature: "web-terminal"
-context: "app"
-created: "20261105_1828"
+feature: web-terminal
+context: app
+created: 20261105_1828
 kind: feature
-status: confirmed
+status: archived
 ---
-
 # Spec Requirement
-
-> **Partly superseded by `cli-lifecycle`.** The binary name is `dream`, and always-on across login is `dream up` (launchd on macOS, systemd --user on Linux), not an open question or a documented recipe only. Kept for history.
 
 ## Feature
 web-terminal
@@ -127,7 +124,7 @@ The owner runs AI coding agents in terminals on his Mac mini and wants to work w
 - Notes: Matches the agent-monitoring use case (agent asks → owner answers from phone). Heuristic details are a planning decision.
 
 ### FR-015
-- Requirement: The owner can clean replay logs: a per-session and a global clean action, plus a configurable retention policy (max log size and/or age) the daemon enforces automatically; cleaning a live session's log does not disrupt the PTY.
+- Requirement: Replay logs are automatically kept short: the daemon drops a log's oldest events continuously when it exceeds the configured size cap (trim happens on append, keeping the newest output, not only on clean or restart), plus a configurable retention policy (max size and/or age) enforced in the background; the owner can also clean per-session and globally; cleaning a live session's log does not disrupt the PTY.
 - Priority: must
 - Notes: Owner requirement — "cơ chế clean log". Policy details (defaults, size vs age) are planning decisions.
 
@@ -156,9 +153,9 @@ The owner runs AI coding agents in terminals on his Mac mini and wants to work w
 - Single owner; never multi-tenant
 
 ## Assumptions
-- Likely stack (planning may adjust): Rust + axum/tokio + tokio-tungstenite + portable-pty; xterm.js frontend vendored and embedded via include_bytes; replay log in an asciinema-v2-shaped stream file per session — grounded in reviews/research-terminal-internals.md
+- Likely stack (planning may adjust): Rust + axum/tokio + tokio-tungstenite + portable-pty; xterm.js frontend vendored and embedded via include_bytes; replay log in asciicast-v3 format (NDJSON, typed events) per session — grounded in reviews/research-terminal-internals.md
 - Per-session state dir holding `session.json` (metadata: name, cwd, setup script, status, log path) + the replay-log stream file — the VibeTunnel control-dir pattern (owner decision: JSON files, no SQLite)
-- Data dir defaults to a platform user-data path (e.g. `~/.local/share/dream` / `~/Library/Application Support/dream`)
+- Data dir defaults to a platform user-data path (e.g. `~/.local/share/webterm` / `~/Library/Application Support/webterm`)
 - Tailscale Serve terminates TLS; the app serves plain HTTP on loopback (reviews/research-remote-exposure.md)
 - Test level defaulted to `full`, UI coverage `critical` — the owner answered the packaging constraint instead of the test question; flagged in the confirmation ask
 
