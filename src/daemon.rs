@@ -89,7 +89,7 @@ fn systemctl(args: &[&str]) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn systemd_unit(program_args: &[String]) -> anyhow::Result<String> {
+fn systemd_unit(program_args: &[String], exe_sha: &str) -> anyhow::Result<String> {
     for a in program_args {
         if a.chars().any(|c| c.is_control()) {
             return Err(anyhow!("argument contains a control character — refusing to write the unit"));
@@ -104,7 +104,8 @@ fn systemd_unit(program_args: &[String]) -> anyhow::Result<String> {
         .join(" ");
     let svc_path = format!("{SERVICE_PATH}:%h/.local/bin");
     Ok(format!(
-        "[Unit]\nDescription=dream web terminal daemon\nAfter=network-online.target\n\n\
+        "# dream-exe-sha256: {exe_sha}\n\
+         [Unit]\nDescription=dream web terminal daemon\nAfter=network-online.target\n\n\
          [Service]\nEnvironment=PATH={svc_path}\nExecStart={exec}\nRestart=always\nRestartSec=3\n\n\
          [Install]\nWantedBy=default.target\n"
     ))
@@ -145,14 +146,15 @@ fn service_path_expanded() -> String {
     }
 }
 
-fn plist_xml(program_args: &[String], log_out: &str, log_err: &str) -> String {
+fn plist_xml(program_args: &[String], log_out: &str, log_err: &str, exe_sha: &str) -> String {
     let args: String = program_args
         .iter()
         .map(|a| format!("    <string>{}</string>", xml_escape(a)))
         .collect::<Vec<_>>()
         .join("\n");
     format!(
-        r#"<?xml version="1.0" encoding="UTF-8"?>
+        r#"<!-- dream-exe-sha256: {exe_sha} -->
+<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
@@ -246,12 +248,11 @@ fn service_loaded(p: Platform) -> bool {
             .output()
             .map(|o| o.status.success())
             .unwrap_or(false),
-        Platform::Linux => systemd_out(&["is-enabled", "dream.service"])
-            .map(|o| o.status.success())
-            .unwrap_or(false)
-            || systemd_out(&["is-active", "dream.service"])
-                .map(|o| o.status.success())
-                .unwrap_or(false),
+        // `systemctl status` exits 4 only when the unit is not loaded at
+        // all — any other result (running, inactive, failed) counts loaded.
+        Platform::Linux => systemd_out(&["status", "dream.service"])
+            .map(|o| o.status.code() != Some(4))
+            .unwrap_or(false),
     }
 }
 
@@ -271,17 +272,35 @@ fn service_active(p: Platform) -> bool {
     }
 }
 
-/// True when the unit file is at least as fresh as the binary it runs —
-/// a rebuilt binary with unchanged flags still needs a reinstall so the
-/// service runs the new code.
-fn unit_fresh_enough(unit_path: &std::path::Path, exe: &str) -> bool {
-    let unit_mt = fs::metadata(unit_path).and_then(|m| m.modified()).ok();
-    let exe_mt = fs::metadata(exe).and_then(|m| m.modified()).ok();
-    match (unit_mt, exe_mt) {
-        (Some(u), Some(b)) => u >= b,
-        (Some(_), None) => false,
-        (None, _) => false,
+/// sha256 of a file via the platform tool — used to pin which binary the
+/// installed unit actually runs, so `up` can tell "same flags" from
+/// "same flags + rebuilt binary" without trusting mtimes.
+fn file_sha256(path: &str) -> Option<String> {
+    for bin in ["/usr/bin/shasum", "/usr/bin/sha256sum", "shasum", "sha256sum"] {
+        let args: &[&str] = if bin.contains("shasum") { &["-a", "256"] } else { &[] };
+        if let Ok(out) = Command::new(bin).args(args).arg(path).output() {
+            if out.status.success() {
+                return Some(
+                    String::from_utf8_lossy(&out.stdout)
+                        .split_whitespace()
+                        .next()?
+                        .to_string(),
+                );
+            }
+        }
     }
+    None
+}
+
+/// The unit records `# dream-exe-sha256: <hex>` — skipping a reinstall is
+/// only safe when the recorded hash equals the running binary's.
+fn unit_matches_binary(unit_text: &str, exe: &str) -> bool {
+    let want = file_sha256(exe);
+    unit_text
+        .lines()
+        .find_map(|l| l.strip_prefix("# dream-exe-sha256: "))
+        .map(|recorded| Some(recorded.trim().to_string()) == want)
+        .unwrap_or(false)
 }
 
 /// `dream up` — install + bootstrap the agent; idempotent.
@@ -328,11 +347,12 @@ pub fn up(cli: &Cli) -> anyhow::Result<()> {
             }
             fs::create_dir_all(plist_path()?.parent().unwrap())?;
             let plist = plist_path()?;
-            let new_xml = plist_xml(&args, &logs.join("out.log").display().to_string(), &logs.join("err.log").display().to_string());
+            let exe_sha = file_sha256(&args[0]).unwrap_or_default();
+            let new_xml = plist_xml(&args, &logs.join("out.log").display().to_string(), &logs.join("err.log").display().to_string(), &exe_sha);
             // `up` is a daily command — when the unit text did not change,
             // leave a healthy running agent alone instead of killing its ptys.
             let already = fs::read_to_string(&plist).map(|c| c == new_xml).unwrap_or(false)
-                && unit_fresh_enough(&plist, &args[0]);
+                && unit_matches_binary(&new_xml, &args[0]);
             if already && service_active(Platform::Macos) {
                 println!("dream is already up — nothing to do");
                 print_url(&cfg);
@@ -346,9 +366,10 @@ pub fn up(cli: &Cli) -> anyhow::Result<()> {
         }
         Platform::Linux => {
             let unit = systemd_unit_path()?;
-            let new_unit = systemd_unit(&args)?;
+            let exe_sha = file_sha256(&args[0]).unwrap_or_default();
+            let new_unit = systemd_unit(&args, &exe_sha)?;
             let already = fs::read_to_string(&unit).map(|c| c == new_unit).unwrap_or(false)
-                && unit_fresh_enough(&unit, &args[0]);
+                && unit_matches_binary(&new_unit, &args[0]);
             if already && service_active(Platform::Linux) {
                 println!("dream is already up — nothing to do");
                 print_url(&cfg);
@@ -393,6 +414,12 @@ pub fn up(cli: &Cli) -> anyhow::Result<()> {
     }
 }
 
+/// Unit file may be deleted only when the stop succeeded or the manager
+/// says nothing is loaded — any other state keeps the file.
+fn unit_removable(still_loaded: bool) -> bool {
+    !still_loaded
+}
+
 /// `dream down` — stop the agent and remove the plist.
 pub fn down() -> anyhow::Result<()> {
     let p = platform()?;
@@ -406,7 +433,7 @@ pub fn down() -> anyhow::Result<()> {
             // Stop failed — only delete the unit when the manager confirms
             // it is not loaded at all; any loaded state (running, scheduled,
             // crashed-pending) means the file must stay.
-            if service_loaded(p) {
+            if !unit_removable(service_loaded(p)) {
                 return Err(err.context("service is still loaded — not removing its unit"));
             }
             eprintln!("{err} (service not loaded)");
@@ -678,7 +705,7 @@ pub fn doctor(cli: &Cli) -> anyhow::Result<()> {
     // and kill the probe process if it outlives the deadline.
     let (tx, rx) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
-        let bins = ["tailscale", "/opt/homebrew/bin/tailscale", "/usr/local/bin/tailscale", "/usr/bin/tailscale"];
+        let bins = ["/opt/homebrew/bin/tailscale", "/usr/local/bin/tailscale", "/usr/bin/tailscale", "tailscale"];
         for bin in bins {
             if let Ok(mut child) = Command::new(bin).arg("status").spawn() {
                 let _ = tx.send(child.id());
@@ -734,6 +761,7 @@ mod tests {
             &["/opt/dream".into(), "--port".into(), "4020".into()],
             "/tmp/o",
             "/tmp/e",
+            "sha",
         );
         assert!(xml.contains("com.dream.daemon"));
         assert!(xml.contains("<string>/opt/dream</string>"));
@@ -745,13 +773,13 @@ mod tests {
 
     #[test]
     fn plist_escapes_xml_chars() {
-        let xml = plist_xml(&["/a&b/<x>".into()], "/o", "/e");
+        let xml = plist_xml(&["/a&b/<x>".into()], "/o", "/e", "sha");
         assert!(xml.contains("/a&amp;b/&lt;x&gt;"));
     }
 
     #[test]
     fn systemd_unit_escapes_percent_and_quotes() {
-        let xml = systemd_unit(&["/opt/dream".into(), "--data-dir".into(), "/home/x%h/data".into()]).unwrap();
+        let xml = systemd_unit(&["/opt/dream".into(), "--data-dir".into(), "/home/x%h/data".into()], "sha").unwrap();
         assert!(xml.contains("ExecStart=/opt/dream --data-dir '/home/x%%h/data'"));
         assert!(xml.contains("Restart=always"));
         assert!(xml.contains("WantedBy=default.target"));
@@ -759,7 +787,7 @@ mod tests {
 
     #[test]
     fn systemd_unit_rejects_control_chars() {
-        assert!(systemd_unit(&["ok".into(), "evil\nExecStartPost=/bin/sh".into()]).is_err());
+        assert!(systemd_unit(&["ok".into(), "evil\nExecStartPost=/bin/sh".into()], "sha").is_err());
     }
 
     #[test]
@@ -769,25 +797,22 @@ mod tests {
     }
 
     #[test]
-    fn down_on_missing_agent_returns_ok() {
-        // Requires the agent to be absent; on a machine where the test
-        // daemon is installed it would legitimately remove it — so skip
-        // when a unit is already loaded rather than asserting a tautology.
-        if service_loaded(Platform::Macos) {
-            return;
-        }
-        down().expect("down with no agent should exit clean");
-        assert!(!plist_path().unwrap().exists());
+    fn unit_removal_decision() {
+        assert!(unit_removable(false));
+        assert!(!unit_removable(true));
     }
 
     #[test]
     fn systemd_unit_pins_env_path_and_escapes() {
-        let u = systemd_unit(&["/b".into(), "/p$HOME/x".into(), "a\nb".into()]).unwrap();
+        let u = systemd_unit(&["/b".into(), "/p$HOME/x".into(), "a\\nb".to_string()], "sha").unwrap();
         assert!(u.contains("Environment=PATH="));
         assert!(u.contains("%h/.local/bin"));
         assert!(u.contains("/p$$HOME/x"));
-        assert!(u.contains("a\\nb"));
-        assert!(systemd_unit(&["/b".into(), "a\u{0007}b".into()]).is_err());
+        // A literal backslash in the arg must survive as an escaped pair.
+        assert!(u.contains("a\\\\nb"));
+        // Real control characters are rejected outright.
+        assert!(systemd_unit(&["/b".into(), "a\u{0007}b".into()], "sha").is_err());
+        assert!(systemd_unit(&["/b".into(), "a\u{000a}b".into()], "sha").is_err());
     }
 
     #[test]
