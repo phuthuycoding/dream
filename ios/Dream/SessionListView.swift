@@ -115,7 +115,16 @@ struct SessionListView: View {
         } else {
             List(sessions, id: \.id) { session in
                 NavigationLink {
-                    TerminalPlaceholderView(session: session)
+                    TerminalScreenView(
+                        session: session,
+                        client: client,
+                        baseURL: profile.baseURL,
+                        tokenProvider: { appState.token(for: profile.id) },
+                        // The `a` frame means the shell wants attention —
+                        // re-list so the row's dot is fresh on pop-back.
+                        onAttention: { Task { await refresh() } },
+                        onUnauthorized: { appState.handleUnauthorized(profileId: profile.id) }
+                    )
                 } label: {
                     SessionRow(session: session)
                 }
