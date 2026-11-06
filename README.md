@@ -203,9 +203,13 @@ Requires iOS 17+.
 - **Pairing**: run `dream url` on the daemon host and paste the printed
   `…/?token=…` URL into the app's pairing form. The token is stored in
   the iOS Keychain; several daemons can be saved as named profiles.
+  The printed URL reflects the bind — for `0.0.0.0`/`::` binds it
+  resolves the machine's LAN IPv4; use that IP if a hostname fails.
 - **Reachability**: the phone must be able to reach the daemon — a
   non-loopback bind on the same LAN (`--bind`/`--public`, see the flag
-  table), or anywhere over your tailnet (see above).
+  table), or anywhere over your tailnet (see above). Note: iOS (ATS)
+  blocks plain `http` to named hosts — pair by IP literal or serve the
+  daemon over `https` (e.g. `tailscale serve`).
 - **Build**: open `ios/Dream.xcodeproj` in Xcode, or from the repo root:
 
   ```sh

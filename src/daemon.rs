@@ -279,9 +279,34 @@ fn admin_host_display(cfg: &Config) -> String {
     if h.contains(':') { format!("[{h}]") } else { h }
 }
 
+/// A routable local IPv4 for printed pairing URLs when the daemon bound
+/// to a wildcard — a UDP connect selects the outbound interface's
+/// address without sending a packet. Unreachable hosts fall back to
+/// loopback (same as admin_host).
+fn routable_ipv4() -> Option<String> {
+    let socket = std::net::UdpSocket::bind(("0.0.0.0", 0)).ok()?;
+    socket.connect("8.8.8.8:80").ok()?;
+    match socket.local_addr().ok()?.ip() {
+        std::net::IpAddr::V4(ip) => Some(ip.to_string()),
+        std::net::IpAddr::V6(_) => None,
+    }
+}
+
+/// admin_host for PRINTED URLs: a wildcard bind pasted into a phone
+/// points at loopback — unreachable. Print the routable LAN IPv4
+/// instead so the pairing line works off-host.
+fn url_host_display(cfg: &Config) -> String {
+    if cfg.bind.is_unspecified() {
+        if let Some(lan) = routable_ipv4() {
+            return lan;
+        }
+    }
+    admin_host_display(cfg)
+}
+
 fn print_url(cfg: &Config) {
     match read_service_token(cfg) {
-        Some(token) => println!("  http://{}:{}/?token={token}", admin_host_display(cfg), cfg.port),
+        Some(token) => println!("  http://{}:{}/?token={token}", url_host_display(cfg), cfg.port),
         None => println!("  (no token file at {} yet)", cfg.data_dir.join("token").display()),
     }
 }
@@ -668,7 +693,7 @@ pub fn url(cli: &Cli) -> anyhow::Result<()> {
     let cfg = Config::load_admin(cli)?;
     match read_service_token(&cfg) {
         Some(token) => {
-            println!("http://{}:{}/?token={token}", admin_host_display(&cfg), cfg.port);
+            println!("http://{}:{}/?token={token}", url_host_display(&cfg), cfg.port);
             Ok(())
         }
         None => Err(anyhow!(
