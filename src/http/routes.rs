@@ -43,40 +43,51 @@ pub struct AppState {
     pub oauth: Option<Arc<GithubOauth>>,
     /// Present exactly when `oauth` is — mints and verifies session cookies.
     pub sessions: Option<Arc<SessionSigner>>,
+    /// `host:port` the daemon bound — the callback URI's authority when a
+    /// request arrives without a usable Host header.
+    pub bind_addr: String,
 }
 
 /// Standalone entry point (tests): builds its own manager. The daemon
 /// uses [`build_router_with`] so the router shares main's one
 /// `RuntimeManager` — the manager that ran `resurrect_all` and the
 /// enforcer must be the one the routes spawn/attach through, or two
-/// monitor sets would track the same sessions.
+/// monitor sets would track the same sessions. `build_router_with`
+/// returns `Result` — a bad session key must fail startup, not panic;
+/// this standalone seam unwraps instead (tests run on a fresh data dir)
+/// and passes the daemon's default bind as the fallback authority.
 pub fn build_router(data_dir: PathBuf, token: String, oauth: Option<Arc<GithubOauth>>) -> Router {
     let runtime = Arc::new(RuntimeManager::new(data_dir.clone(), DEFAULT_IDLE_ATTENTION));
-    build_router_with(runtime, data_dir, token, oauth)
+    build_router_with(runtime, data_dir, token, oauth, "127.0.0.1:4020".to_string())
+        .expect("session key must load or generate under the data dir")
 }
 
+/// `bind_addr` (`host:port`, the configured listen address) backs the
+/// callback URI when a request's Host header is missing or malformed.
 pub fn build_router_with(
     runtime: Arc<RuntimeManager>,
     data_dir: PathBuf,
     token: String,
     oauth: Option<Arc<GithubOauth>>,
-) -> Router {
+    bind_addr: String,
+) -> anyhow::Result<Router> {
     // The signer exists only to serve the oauth flow: minting the
-    // callback's cookie and letting the middleware verify it.
-    let sessions = oauth.as_ref().map(|_| {
-        Arc::new(
-            SessionSigner::load_or_generate(&data_dir)
-                .expect("session key must load or generate under the data dir"),
-        )
-    });
+    // callback's cookie and letting the middleware verify it. Its load
+    // propagates like `AuthToken::load_or_generate` — an unreadable or
+    // corrupt key file is a startup error, not a panic.
+    let sessions = oauth
+        .as_ref()
+        .map(|_| SessionSigner::load_or_generate(&data_dir).map(Arc::new))
+        .transpose()?;
     let state = AppState {
         runtime,
         data_dir,
         token,
         oauth,
         sessions,
+        bind_addr,
     };
-    Router::new()
+    Ok(Router::new()
         .route("/auth/mode", get(auth_mode))
         .route("/auth/github", get(github_login_start))
         .route("/auth/callback", get(github_login_callback))
@@ -93,7 +104,7 @@ pub fn build_router_with(
         .route("/api/logs/clean", post(clean_all_logs))
         .fallback(static_files::serve)
         .layer(middleware::from_fn_with_state(state.clone(), require_token))
-        .with_state(state)
+        .with_state(state))
 }
 
 type ApiResult<T> = Result<T, (StatusCode, String)>;
@@ -299,13 +310,14 @@ async fn github_login_start(State(state): State<AppState>, headers: HeaderMap) -
         return StatusCode::NOT_FOUND.into_response();
     };
     let csrf = oauth::generate_state();
-    let location = oauth.build_authorize_url(&callback_uri(&headers), &csrf);
+    let location = oauth.build_authorize_url(&callback_uri(&headers, &state.bind_addr), &csrf);
     // HttpOnly: no script ever reads the CSRF token. SameSite=Lax: the
     // cookie still rides the top-level navigation back from GitHub.
     // Max-Age=600 caps the window a started login can complete in.
     let state_cookie = format!(
-        "{}={csrf}; HttpOnly; SameSite=Lax; Max-Age=600; Path=/",
-        oauth::STATE_COOKIE
+        "{}={csrf}; HttpOnly{}; SameSite=Lax; Max-Age=600; Path=/",
+        oauth::STATE_COOKIE,
+        secure_attr(&headers)
     );
     redirect_with_cookies(&location, &[state_cookie])
 }
@@ -330,7 +342,7 @@ async fn github_login_callback(
     let (Some(oauth), Some(signer)) = (&state.oauth, &state.sessions) else {
         return StatusCode::NOT_FOUND.into_response();
     };
-    let clear_state = clear_cookie(oauth::STATE_COOKIE);
+    let clear_state = clear_cookie(oauth::STATE_COOKIE, &headers);
     let reject = |status: StatusCode| match set_cookie_headers(std::slice::from_ref(&clear_state)) {
         Some(headers) => (status, headers).into_response(),
         None => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
@@ -342,22 +354,22 @@ async fn github_login_callback(
     else {
         return reject(StatusCode::BAD_REQUEST);
     };
-    if query_state != cookie_state {
+    if !constant_time_eq(&query_state, &cookie_state) {
         return reject(StatusCode::BAD_REQUEST);
     }
 
-    let redirect_uri = callback_uri(&headers);
+    let redirect_uri = callback_uri(&headers, &state.bind_addr);
     let access_token = match oauth.exchange_code(&code, &redirect_uri).await {
         Ok(token) => token,
-        Err(err) => return internal(err).into_response(),
+        Err(err) => return internal_with_clear(err, &clear_state),
     };
     let login = match oauth.fetch_login(&access_token).await {
         Ok(login) => login,
-        Err(err) => return internal(err).into_response(),
+        Err(err) => return internal_with_clear(err, &clear_state),
     };
     let orgs = match oauth.fetch_orgs(&access_token).await {
         Ok(orgs) => orgs,
-        Err(err) => return internal(err).into_response(),
+        Err(err) => return internal_with_clear(err, &clear_state),
     };
     if !oauth::is_allowlisted(&oauth.allowlist, &login, &orgs) {
         return reject(StatusCode::FORBIDDEN);
@@ -365,8 +377,9 @@ async fn github_login_callback(
 
     let expires = now_unix() + SESSION_TTL_SECS;
     let session = format!(
-        "{SESSION_COOKIE}={}; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age={SESSION_TTL_SECS}",
-        signer.mint(&login, expires)
+        "{SESSION_COOKIE}={}; HttpOnly{}; SameSite=Lax; Path=/; Max-Age={SESSION_TTL_SECS}",
+        signer.mint(&login, expires),
+        secure_attr(&headers)
     );
     redirect_with_cookies("/", &[session, clear_state])
 }
@@ -374,8 +387,8 @@ async fn github_login_callback(
 /// `POST /auth/logout` — expire `dream_session`. The middleware whitelists
 /// it by path: clearing a cookie has no CSRF surface, and a stale or
 /// absent credential must not lock a client out of logging out.
-async fn logout() -> Response {
-    redirect_with_cookies("/", &[clear_cookie(SESSION_COOKIE)])
+async fn logout(headers: HeaderMap) -> Response {
+    redirect_with_cookies("/", &[clear_cookie(SESSION_COOKIE, &headers)])
 }
 
 /// `GET /auth/mode` — public probe the gate fetches at bootstrap to decide
@@ -385,21 +398,102 @@ async fn auth_mode(State(state): State<AppState>) -> Json<serde_json::Value> {
     Json(serde_json::json!({ "github": state.oauth.is_some() }))
 }
 
-/// `http://<host>/auth/callback` rebuilt from the request's Host header —
-/// the daemon is cleartext HTTP only (operators front it with a tunnel
-/// for TLS), so the scheme is fixed.
-fn callback_uri(headers: &HeaderMap) -> String {
-    let host = headers
+/// `<scheme>://<host>/auth/callback` rebuilt per request — the scheme
+/// comes from `X-Forwarded-Proto` (a TLS front like `tailscale serve`
+/// signals https; the daemon itself speaks only cleartext HTTP) and the
+/// host from the Host header, falling back to the configured bind
+/// address when the header is missing or malformed.
+fn callback_uri(headers: &HeaderMap, bind_addr: &str) -> String {
+    format!(
+        "{}://{}/auth/callback",
+        request_scheme(headers),
+        request_host(headers, bind_addr)
+    )
+}
+
+/// `https` when a trusted front terminated TLS and said so via
+/// `X-Forwarded-Proto`, else `http`. A direct connection is always
+/// cleartext — treating it as https would mint `Secure` cookies the
+/// browser then drops (Safari drops them even on localhost: a login
+/// loop).
+fn request_scheme(headers: &HeaderMap) -> &'static str {
+    match headers
+        .get("x-forwarded-proto")
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.split(',').next())
+    {
+        Some(proto) if proto.trim().eq_ignore_ascii_case("https") => "https",
+        _ => "http",
+    }
+}
+
+/// The request's Host authority, or `bind_addr` when the header is
+/// missing or not well-formed — the value is embedded verbatim in the
+/// callback URI, so anything that could reshape the URL falls back
+/// instead.
+fn request_host<'a>(headers: &'a HeaderMap, bind_addr: &'a str) -> &'a str {
+    headers
         .get(header::HOST)
         .and_then(|value| value.to_str().ok())
-        .unwrap_or_default();
-    format!("http://{host}/auth/callback")
+        .filter(|host| is_well_formed_host(host))
+        .unwrap_or(bind_addr)
+}
+
+/// Well-formed authority = `name[:port]` or `[v6][:port]`: alnum plus
+/// `. - : [ ]` and nothing that could reshape the surrounding URL
+/// (no `@`, `/`, `%`, whitespace).
+fn is_well_formed_host(host: &str) -> bool {
+    !host.is_empty()
+        && !host.starts_with(':')
+        && (!host.starts_with('[') || host.contains(']'))
+        && host
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | ':' | '[' | ']'))
+}
+
+/// `; Secure` when the request's effective scheme is https, else "" —
+/// mints and clears share this one signal so an attribute mismatch can
+/// never leave a stale cookie behind.
+fn secure_attr(headers: &HeaderMap) -> &'static str {
+    if request_scheme(headers) == "https" {
+        "; Secure"
+    } else {
+        ""
+    }
 }
 
 /// A Set-Cookie a client reads as "drop this cookie": empty value +
-/// Max-Age=0, matching the attributes the cookie was set with.
-fn clear_cookie(name: &str) -> String {
-    format!("{name}=; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=0")
+/// Max-Age=0, matching the attributes the cookie was set with — a
+/// `Secure` clear over plain http would be dropped exactly like an
+/// over-secured mint, leaving the cookie behind.
+fn clear_cookie(name: &str, headers: &HeaderMap) -> String {
+    format!(
+        "{name}=; HttpOnly{}; SameSite=Lax; Path=/; Max-Age=0",
+        secure_attr(headers)
+    )
+}
+
+/// Upstream (GitHub exchange/profile) failures are still an outcome of
+/// the flow: 500, and the consumed state cookie is cleared like on every
+/// other path so a retry starts a fresh login.
+fn internal_with_clear(err: anyhow::Error, clear_state: &str) -> Response {
+    let (status, body) = internal(err);
+    match set_cookie_headers(&[clear_state.to_string()]) {
+        Some(headers) => (status, headers, body).into_response(),
+        None => (status, body).into_response(),
+    }
+}
+
+/// Equality without `!=`'s early exit — the query state is
+/// attacker-controlled, so the compare must not leak how much of the
+/// CSRF token a guess got right.
+fn constant_time_eq(a: &str, b: &str) -> bool {
+    let (a, b) = (a.as_bytes(), b.as_bytes());
+    a.len() == b.len()
+        && a.iter()
+            .zip(b.iter())
+            .fold(0u8, |acc, (x, y)| acc | (x ^ y))
+            == 0
 }
 
 fn now_unix() -> u64 {

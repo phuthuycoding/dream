@@ -88,7 +88,13 @@ async fn main() -> anyhow::Result<()> {
         .github_oauth
         .clone()
         .map(|config| Arc::new(GithubOauth::from(config)));
-    let app = build_router_with(manager, cfg.data_dir.clone(), auth.token, oauth);
+    let app = build_router_with(
+        manager,
+        cfg.data_dir.clone(),
+        auth.token,
+        oauth,
+        addr.clone(),
+    )?;
     let listener = tokio::net::TcpListener::bind(&addr)
         .await
         .with_context(|| format!("cannot bind {addr} — port already in use?"))?;
