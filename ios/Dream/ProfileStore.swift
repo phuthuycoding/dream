@@ -76,9 +76,16 @@ final class ProfileStore {
     /// duplicate silently misidentifies the target. The profile's own
     /// id is excluded so re-saving itself never self-collides.
     private func checkUniqueName(_ profile: DaemonProfile) throws {
-        if profiles.contains(where: { $0.id != profile.id && $0.name == profile.name }) {
+        if Self.hasDuplicateName(profile, among: profiles) {
             throw ProfileError.duplicateName(profile.name)
         }
+    }
+
+    /// The duplicate-name predicate `checkUniqueName` enforces, pure
+    /// and internal so a unit test can pin it without touching disk or
+    /// the Keychain.
+    static func hasDuplicateName(_ profile: DaemonProfile, among profiles: [DaemonProfile]) -> Bool {
+        profiles.contains { $0.id != profile.id && $0.name == profile.name }
     }
 
     /// Drop a profile's Keychain token while keeping the profile — the

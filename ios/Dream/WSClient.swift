@@ -84,8 +84,17 @@ final class WSClient: NSObject {
         self.task = task
         task.resume()
         receiveNext()
-        // ~15s keepalive — silent stalls (a suspend or a dead route) are
-        // reported through the pong error, not left hanging forever.
+        // The ~15s keepalive arms in armPingTimer() once the upgrade is
+        // proven live — pinging a still-connecting socket would fail
+        // and kill a handshake that was about to succeed.
+    }
+
+    /// ~15s keepalive — silent stalls (a suspend or a dead route) are
+    /// reported through the pong error, not left hanging forever. Armed
+    /// by the first completed receive, i.e. after the handshake has
+    /// actually finished; idempotent across frames.
+    private func armPingTimer() {
+        guard !finished, pingTimer == nil else { return }
         pingTimer = Timer.scheduledTimer(withTimeInterval: 15, repeats: true) { [weak self] _ in
             self?.task?.sendPing { [weak self] error in
                 if let error {
@@ -127,13 +136,14 @@ final class WSClient: NSObject {
         task?.receive { [weak self] result in
             guard let self, !self.finished else { return }
             switch result {
-            case .success(.data(let data)):
-                self.handle(data)
-                self.receiveNext()
-            case .success(.string):
+            case .success(let message):
+                // A completed receive means the upgrade finished — the
+                // keepalive only makes sense on a live socket.
+                self.armPingTimer()
+                if case .data(let data) = message {
+                    self.handle(data)
+                }
                 // Text frames are not in the protocol — drop, keep reading.
-                self.receiveNext()
-            case .success:
                 self.receiveNext()
             case .failure(let error):
                 self.finish(error: error)
@@ -206,6 +216,10 @@ extension WSClient: URLSessionWebSocketDelegate {
         task: URLSessionTask,
         didCompleteWithError error: Error?
     ) {
+        // A superseded socket's late callback must not classify against
+        // the new attach — its 401 would report (and clear) a credential
+        // it never presented.
+        guard !finished else { return }
         // A failed upgrade carries the HTTP status on task.response —
         // classify it before the generic close so 401 routes to re-pair
         // and 404 names the dead session instead of a bare error.

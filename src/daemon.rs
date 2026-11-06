@@ -3,7 +3,7 @@
 
 use std::fs;
 use std::io::Write;
-use std::net::{TcpStream, ToSocketAddrs};
+use std::net::{IpAddr, Ipv4Addr, TcpStream, ToSocketAddrs};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
@@ -292,11 +292,13 @@ fn routable_ipv4() -> Option<String> {
     }
 }
 
-/// admin_host for PRINTED URLs: a wildcard bind pasted into a phone
+/// admin_host for PRINTED URLs: an IPv4 wildcard bind pasted into a phone
 /// points at loopback — unreachable. Print the routable LAN IPv4
-/// instead so the pairing line works off-host.
+/// instead so the pairing line works off-host. Only `0.0.0.0` gets that
+/// substitution: a `--bind ::` listener is IPv6-only, so a printed IPv4
+/// address would be just as unreachable as loopback.
 fn url_host_display(cfg: &Config) -> String {
-    if cfg.bind.is_unspecified() {
+    if cfg.bind == IpAddr::V4(Ipv4Addr::UNSPECIFIED) {
         if let Some(lan) = routable_ipv4() {
             return lan;
         }

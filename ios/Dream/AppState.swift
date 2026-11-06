@@ -83,8 +83,13 @@ final class AppState {
     /// value, so a stale response can't wipe a freshly re-paired token.
     func handleUnauthorized(profileId: UUID, rejectedToken: String? = nil) {
         let stored = store.token(for: profileId)
-        guard stored == rejectedToken else {
-            NSLog("AppState: ignored stale 401 for profile \(profileId.uuidString) — stored token differs from the rejected one")
+        // Only a request that actually carried the stored credential may
+        // clear it: while the Keychain is locked both sides read nil and
+        // nil == nil would wipe nothing yet still trip a spurious re-pair.
+        // The stored==nil route to PairingView comes from the token
+        // check, not this flag.
+        guard let rejectedToken, stored == rejectedToken else {
+            NSLog("AppState: ignored 401 for profile \(profileId.uuidString) — no stored credential matches the rejected token")
             return
         }
         do {

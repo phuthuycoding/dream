@@ -3,6 +3,37 @@ import Observation
 import SwiftTerm
 import UIKit
 
+/// web/terminal.js parity — the bounded-backoff reattach decision as a
+/// pure, testable shape: a 500ms floor doubling to an ~8s ceiling,
+/// capped so a permanently dead daemon doesn't retry forever.
+enum ReconnectPolicy {
+    static let floorMs = 500
+    static let ceilingMs = 8_000
+    static let maxAttempts = 8
+
+    /// Why the socket dropped — drives whether another attach runs.
+    enum CloseKind: Equatable {
+        /// An unclassified transport drop — retryable.
+        case transport
+        /// A classified failure (401/404) or a deliberate teardown —
+        /// retrying loops the same error; the overlay owns the next step.
+        case classified
+    }
+
+    /// ms before the next attach for 0-based `attempt` — the floor
+    /// doubling up to the ceiling. The shift is bounded so a
+    /// pathological attempt counter can't overflow the multiplier.
+    static func nextDelayMs(attempt: Int) -> Int {
+        min(floorMs << min(max(attempt, 0), 10), ceilingMs)
+    }
+
+    /// Another automatic attach is due only for a retryable close that
+    /// is still under the attempt cap.
+    static func shouldReconnect(kind: CloseKind, attempt: Int) -> Bool {
+        kind == .transport && attempt < maxAttempts
+    }
+}
+
 /// Owns one terminal attach: the SwiftTerm view on one side, the
 /// `WSClient` on the other, and the protocol state machine between them
 /// (web/terminal.js parity). As the view's `terminalDelegate`, it turns
@@ -41,12 +72,6 @@ final class TerminalController {
     private let onUnauthorized: (String?) -> Void
     /// The upgrade answered 404 — the session row is stale; re-list.
     private let onSessionGone: () -> Void
-
-    /// web/terminal.js parity — 500ms floor, ~8s ceiling, bounded so a
-    /// permanently dead daemon doesn't retry forever.
-    private static let reconnectFloorMs = 500
-    private static let reconnectCeilingMs = 8_000
-    private static let maxReconnectAttempts = 8
 
     /// Every live access happens on the main actor; `nonisolated(unsafe)`
     /// only lets `deinit` close the socket. By then the client callbacks'
@@ -153,9 +178,17 @@ final class TerminalController {
     func detach() {
         reconnectTask?.cancel()
         reconnectTask = nil
-        guard let old = ws else { return }
+        guard let old = ws else {
+            pendingFeed = Data()
+            return
+        }
         ws = nil
         old.disconnect()
+        // attach() enters through here too — disconnect() flushes the
+        // old socket's buffered replay through feed(), and bytes a dead
+        // socket left coalesced must never paint onto the fresh attach
+        // (the reattach replays them from the daemon anyway).
+        pendingFeed = Data()
     }
 
     /// Foreground return (scenePhase → .active): iOS suspends sockets in
@@ -211,13 +244,28 @@ final class TerminalController {
         }
     }
 
+    /// Feed whatever output is still queued for the next runloop tick,
+    /// synchronously — wire order puts those bytes ahead of a snapshot
+    /// and its scrollback replay, so they must paint first. A pending
+    /// scheduled flush stays armed and harmlessly re-feeds an empty
+    /// batch.
+    private func drainPendingFeed() {
+        let batch = pendingFeed
+        pendingFeed = Data()
+        guard !batch.isEmpty else { return }
+        terminalView?.feed(byteArray: ArraySlice(batch))
+    }
+
     /// Applies one `s` payload the way the web client does: resize the
     /// emulator to the dump's geometry first (its cells map 1:1 onto the
     /// screen), then replay the buffered scrollback, then the snapshot.
-    /// The snapshot's own `\x1bc` is the emulator reset, so a mid-stream
-    /// snapshot is also the resync path — nothing extra to clear.
+    /// The payload's leading `\x1bc` (RIS) is dropped — fed after the
+    /// scrollback it would reset the whole emulator and discard the
+    /// replay just restored. The dump still repaints every cell, so a
+    /// mid-stream snapshot remains the resync path.
     private func applySnapshot(scrollback: [Data], payload: Data) {
         guard let view = terminalView else { return }
+        drainPendingFeed()
         if let geometry = Self.snapshotGeometry(payload) {
             // resize() reports back through sizeChanged → the `r` frame
             // the protocol asks for after a snapshot goes out there.
@@ -226,11 +274,22 @@ final class TerminalController {
         for chunk in scrollback {
             view.feed(byteArray: ArraySlice(chunk))
         }
-        view.feed(byteArray: ArraySlice(payload))
+        view.feed(byteArray: ArraySlice(Self.strippingLeadingRIS(payload)))
         // A completed attach contract resets the backoff counter — the
         // next drop starts again from the floor.
         reconnectAttempt = 0
         phase = .live
+    }
+
+    /// Drop the snapshot's leading `\x1bc` (RIS): SwiftTerm's reset
+    /// replaces the whole buffer, which would wipe the scrollback fed
+    /// just before it. The rest of the payload — geometry marker, the
+    /// DEC-2026-wrapped dump, mode restores — still applies; a leading
+    /// `\x1b[!p` soft reset is kept since it clears modes, not cells.
+    static func strippingLeadingRIS(_ payload: Data) -> Data {
+        let ris: [UInt8] = [0x1B, 0x63] // ESC c
+        guard payload.starts(with: ris) else { return payload }
+        return payload.dropFirst(ris.count)
     }
 
     /// `\x1b[8;<rows>;<cols>t` — the geometry field the daemon writes
@@ -275,27 +334,26 @@ final class TerminalController {
         ws = nil
         if case .ended = phase { return }
         let reason = error.map { APIError.describe($0) } ?? "The daemon closed the connection."
-        // A classified failure (401/404) already set the terminal phase —
-        // retrying the same dead route would just loop the same error.
-        guard !reconnectSuppressed else { return }
         scheduleReconnect(reason: reason)
     }
 
-    /// Bounded-backoff reattach (web/terminal.js parity): 500ms floor
-    /// doubling to an ~8s ceiling. Past the attempt cap the overlay
+    /// Bounded-backoff reattach (web/terminal.js parity) — the policy
+    /// owns the delay and whether a retry runs at all: a classified
+    /// failure (401/404) already set the terminal phase, so it stops
+    /// here without touching it; past the attempt cap the overlay
     /// offers manual reconnect instead of retrying a dead route forever.
     private func scheduleReconnect(reason: String) {
-        guard reconnectAttempt < Self.maxReconnectAttempts else {
-            phase = .disconnected("\(reason) — reconnect gave up after \(Self.maxReconnectAttempts) attempts.")
+        let kind: ReconnectPolicy.CloseKind = reconnectSuppressed ? .classified : .transport
+        guard ReconnectPolicy.shouldReconnect(kind: kind, attempt: reconnectAttempt) else {
+            if kind == .transport {
+                phase = .disconnected("\(reason) — reconnect gave up after \(ReconnectPolicy.maxAttempts) attempts.")
+            }
             return
         }
-        let delayMs = min(
-            Self.reconnectFloorMs * (1 << reconnectAttempt),
-            Self.reconnectCeilingMs
-        )
+        let delayMs = ReconnectPolicy.nextDelayMs(attempt: reconnectAttempt)
         reconnectAttempt += 1
         phase = .reconnecting(
-            "\(reason)\nReconnecting in \(delayMs / 1000)s… (attempt \(reconnectAttempt)/\(Self.maxReconnectAttempts))"
+            "\(reason)\nReconnecting in \(delayMs / 1000)s… (attempt \(reconnectAttempt)/\(ReconnectPolicy.maxAttempts))"
         )
         reconnectTask = Task { [weak self] in
             try? await Task.sleep(for: .milliseconds(delayMs))
