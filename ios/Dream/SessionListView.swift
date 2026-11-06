@@ -56,7 +56,7 @@ struct SessionListView: View {
                         _ = try await client.createSession(name: name, cmd: cmd, cwd: cwd)
                         await refresh()
                     } catch APIError.unauthorized {
-                        appState.handleUnauthorized()
+                        appState.handleUnauthorized(profileId: profile.id)
                         throw APIError.unauthorized
                     }
                 }
@@ -160,7 +160,7 @@ struct SessionListView: View {
             sessions = try await client.listSessions()
             banner = nil
         } catch APIError.unauthorized {
-            appState.handleUnauthorized()
+            appState.handleUnauthorized(profileId: profile.id)
             return
         } catch APIError.unreachable(let error) {
             banner = "Daemon unreachable — \(error.localizedDescription)"
@@ -178,7 +178,7 @@ struct SessionListView: View {
                 try await action()
                 await refresh()
             } catch APIError.unauthorized {
-                appState.handleUnauthorized()
+                appState.handleUnauthorized(profileId: profile.id)
             } catch {
                 failure = APIError.describe(error)
             }

@@ -19,6 +19,7 @@ struct PairingView: View {
     @State private var name = ""
     @State private var errorMessage: String?
     @State private var saving = false
+    @State private var showProfiles = false
 
     init(existing: DaemonProfile? = nil) {
         self.existing = existing
@@ -76,9 +77,22 @@ struct PairingView: View {
                     .disabled(saving)
                     .accessibilityIdentifier("pairing.save")
                 }
+
+                // A daemon that keeps rejecting tokens must not trap the
+                // user — the switcher lets them pick another profile or
+                // delete this one.
+                if existing != nil {
+                    Section {
+                        Button("Use a different daemon") { showProfiles = true }
+                            .accessibilityIdentifier("pairing.switch")
+                    }
+                }
             }
             .navigationTitle(existing.map { "Re-pair \($0.name)" } ?? "Pair a daemon")
             .onAppear(perform: prefill)
+            .sheet(isPresented: $showProfiles) {
+                ProfileListView()
+            }
         }
     }
 
@@ -144,11 +158,20 @@ struct PairingView: View {
             throw PairingURLError.invalidURL
         }
 
-        var components = URLComponents()
-        components.scheme = "http"
+        // On re-pair, seed components from the stored baseURL so its
+        // scheme and path survive — rebuilding as http://host:port would
+        // silently downgrade https pairings and drop path prefixes.
+        var components = existing.flatMap {
+            URLComponents(url: $0.baseURL, resolvingAgainstBaseURL: false)
+        } ?? URLComponents()
+        if components.scheme == nil {
+            components.scheme = "http"
+        }
         components.host = hostText
         let portText = port.trimmingCharacters(in: .whitespaces)
-        if !portText.isEmpty {
+        if portText.isEmpty {
+            components.port = nil
+        } else {
             guard let value = Int(portText), (1...65_535).contains(value) else {
                 throw PairingURLError.invalidPort
             }

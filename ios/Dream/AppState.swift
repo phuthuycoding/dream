@@ -50,6 +50,9 @@ final class AppState {
 
     func setActiveProfile(_ id: UUID) {
         store.activeProfileId = id
+        // The repair flag describes the profile being left — a deliberate
+        // switch is the escape hatch out of the re-pair screen.
+        needsRepair = false
         sync()
     }
 
@@ -69,15 +72,18 @@ final class AppState {
         sync()
     }
 
-    /// A 401 from the daemon: drop the stored credential and flag the
-    /// re-pair prompt. The profile itself is kept.
-    func handleUnauthorized() {
-        guard let id = activeProfileId else { return }
+    /// A 401 from the daemon: drop the stored credential of the profile
+    /// whose request was rejected — a stale in-flight request from a
+    /// profile the user already left must not touch the active profile's
+    /// token. The re-pair prompt only applies when the rejected profile
+    /// is still the active one.
+    func handleUnauthorized(profileId: UUID) {
         do {
-            try store.clearToken(for: id)
+            try store.clearToken(for: profileId)
         } catch {
-            NSLog("AppState: failed to clear rejected token for profile \(id.uuidString): \(error)")
+            NSLog("AppState: failed to clear rejected token for profile \(profileId.uuidString): \(error)")
         }
+        guard profileId == activeProfileId else { return }
         needsRepair = true
     }
 
