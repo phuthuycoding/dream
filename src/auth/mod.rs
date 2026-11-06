@@ -443,11 +443,10 @@ mod tests {
         });
         assert!(metadata.is_file());
         assert!(
-            fs::read_to_string(&key_path)
+            !fs::read_to_string(&key_path)
                 .expect("session-key readable")
                 .trim()
-                .len()
-                > 0,
+                .is_empty(),
             "the persisted key must be non-empty"
         );
         assert_owner_only(&key_path);
