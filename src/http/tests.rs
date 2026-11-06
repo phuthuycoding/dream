@@ -633,6 +633,7 @@ async fn perform_login(client: &reqwest::Client, base: &str) -> String {
     let resp = client
         .get(format!("{base}/auth/callback?code=stub-code&state={state}"))
         .header("cookie", format!("dream_oauth_state={state}"))
+        .header("x-forwarded-proto", "https")
         .send()
         .await
         .expect("callback request");
