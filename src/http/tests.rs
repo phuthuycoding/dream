@@ -270,6 +270,28 @@ async fn websocket_upgrade_with_a_valid_query_token_passes_auth() {
     }
 }
 
+#[tokio::test]
+async fn websocket_upgrade_with_a_valid_bearer_token_switches_protocols() {
+    let data = TempDir::new().expect("tempdir");
+    let session = seed_session(data.path(), "ws-bearer");
+    let base = spawn_server(data.path()).await;
+    let client = reqwest::Client::new();
+
+    // `is_authorized` checks the Authorization header before `?token=` —
+    // header-capable clients (the iOS app) attach this way, so the
+    // bearer must unlock the same 101 the query channel gets.
+    let resp = ws_upgrade_request(&client, &format!("{base}/api/sessions/{}/ws", session.id))
+        .bearer_auth(TOKEN)
+        .send()
+        .await
+        .expect("ws upgrade request");
+    assert_eq!(
+        resp.status(),
+        StatusCode::SWITCHING_PROTOCOLS,
+        "a valid Bearer must upgrade the WS attach to 101"
+    );
+}
+
 // ---------------------------------------------------------------- TC-014
 
 #[tokio::test]

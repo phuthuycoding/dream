@@ -35,6 +35,7 @@
 		1A0000000000000000000A6A /* SnapshotPayloadHelpersTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A0000000000000000000A6D /* SnapshotPayloadHelpersTests.swift */; };
 		1A0000000000000000000A6E /* AttachSequencerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A0000000000000000000A6F /* AttachSequencerTests.swift */; };
 		1A0000000000000000000A70 /* SnapshotFeedSequenceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A0000000000000000000A71 /* SnapshotFeedSequenceTests.swift */; };
+		1A0000000000000000000A73 /* WatchdogSeamTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A0000000000000000000A72 /* WatchdogSeamTests.swift */; };
 		1A0000000000000000000A5C /* Frame.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A0000000000000000000A36 /* Frame.swift */; };
 		1A0000000000000000000A5D /* WSClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A0000000000000000000A37 /* WSClient.swift */; };
 		1A0000000000000000000A5E /* TerminalController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A0000000000000000000A38 /* TerminalController.swift */; };
@@ -100,6 +101,7 @@
 		1A0000000000000000000A6D /* SnapshotPayloadHelpersTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SnapshotPayloadHelpersTests.swift; sourceTree = "<group>"; };
 		1A0000000000000000000A6F /* AttachSequencerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AttachSequencerTests.swift; sourceTree = "<group>"; };
 		1A0000000000000000000A71 /* SnapshotFeedSequenceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SnapshotFeedSequenceTests.swift; sourceTree = "<group>"; };
+		1A0000000000000000000A72 /* WatchdogSeamTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WatchdogSeamTests.swift; sourceTree = "<group>"; };
 		1A0000000000000000000A05 /* Dream.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Dream.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		1A0000000000000000000A06 /* DreamTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = DreamTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		1B0000000000000000000B20 /* DreamUITestCase.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DreamUITestCase.swift; sourceTree = "<group>"; };
@@ -190,6 +192,7 @@
 				1A0000000000000000000A6D /* SnapshotPayloadHelpersTests.swift */,
 				1A0000000000000000000A6F /* AttachSequencerTests.swift */,
 				1A0000000000000000000A71 /* SnapshotFeedSequenceTests.swift */,
+				1A0000000000000000000A72 /* WatchdogSeamTests.swift */,
 			);
 			path = DreamTests;
 			sourceTree = "<group>";
@@ -391,6 +394,7 @@
 				1A0000000000000000000A6A /* SnapshotPayloadHelpersTests.swift in Sources */,
 				1A0000000000000000000A6E /* AttachSequencerTests.swift in Sources */,
 				1A0000000000000000000A70 /* SnapshotFeedSequenceTests.swift in Sources */,
+				1A0000000000000000000A73 /* WatchdogSeamTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
