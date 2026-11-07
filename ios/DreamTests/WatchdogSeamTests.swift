@@ -8,11 +8,13 @@ import XCTest
 ///   rule the ~15s keepalive applies. nil means the watchdog was never
 ///   armed (no receive has completed), which is not stale by contract;
 ///   past the window means the socket is dead.
-/// - `ProfileStore.shouldQuarantine(decodeError:)` — an existing file
-///   that won't decode is always moved aside before the store starts
-///   empty.
 /// - `ProfileStore.quarantineURL(for:at:)` — the `corrupt-<ts>` sibling
-///   the dead file is renamed to.
+///   the dead file is renamed to. The move itself is pinned by a real
+///   round-trip: garbage bytes on disk → empty store → save → the
+///   quarantined sibling still holds the original bytes.
+/// - `TerminalController.resumeAction(for:reconnectSuppressed:)` — the
+///   foreground-resume decision `resumeIfNeeded` acts on (see
+///   `ResumeSeamTests` below).
 final class WatchdogSeamTests: XCTestCase {
 
     // MARK: - WSClient.isStale
@@ -80,21 +82,101 @@ final class WatchdogSeamTests: XCTestCase {
         )
     }
 
-    // MARK: - ProfileStore.shouldQuarantine
+    // MARK: - ProfileStore corrupt-file round-trip
 
-    func testADecodeErrorIsQuarantined() {
-        let corrupt = Data("not json".utf8)
-        let decodeError: Error
-        do {
-            _ = try JSONDecoder().decode([String: String].self, from: corrupt)
-            return XCTFail("decoding garbage must throw")
-        } catch {
-            decodeError = error
+    func testACorruptFileIsMovedAsideAndSurvivesTheNextSaveByteForByte() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("dream-quarantine-\(UUID().uuidString)")
+        let fileURL = directory.appendingPathComponent("profiles.json")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let garbage = Data("not json".utf8)
+        try garbage.write(to: fileURL)
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let store = ProfileStore(fileURL: fileURL)
+        XCTAssertTrue(
+            store.profiles.isEmpty,
+            "an undecodable file must fall back to an empty store, not crash"
+        )
+
+        // The quarantine ran at init; a real save mutation must leave the
+        // quarantined copy untouched while writing a fresh profiles.json.
+        let profile = DaemonProfile(
+            id: UUID(),
+            name: "mac-studio",
+            baseURL: URL(string: "http://192.168.1.5:4020")!
+        )
+        try store.save(profile, token: "tok-\(UUID().uuidString)")
+        defer { try? store.clearToken(for: profile.id) }
+
+        let siblings = try FileManager.default.contentsOfDirectory(
+            at: directory, includingPropertiesForKeys: nil
+        )
+        let quarantined = siblings.filter {
+            $0.lastPathComponent.hasPrefix("profiles.json.corrupt-")
+        }
+        XCTAssertEqual(
+            quarantined.count, 1,
+            "exactly one corrupt-<ts> sibling must exist after the save"
+        )
+        XCTAssertEqual(
+            try Data(contentsOf: try XCTUnwrap(quarantined.first)),
+            garbage,
+            "the quarantined file must hold the original garbage bytes — nothing overwritten"
+        )
+        XCTAssertTrue(
+            ProfileStore(fileURL: fileURL).profiles.contains { $0.id == profile.id },
+            "the fresh profiles.json must decode — a second store round-trips the saved profile"
+        )
+    }
+
+    func testPersistIsRefusedWhenTheQuarantineMoveItselfFails() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("dream-quarantine-blocked-\(UUID().uuidString)")
+        let fileURL = directory.appendingPathComponent("profiles.json")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let garbage = Data("not json".utf8)
+        try garbage.write(to: fileURL)
+        // A read-only directory makes the rename fail — the file can be
+        // read (decode attempt runs) but never moved aside.
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0o555], ofItemAtPath: directory.path
+        )
+        defer {
+            try? FileManager.default.setAttributes(
+                [.posixPermissions: 0o755], ofItemAtPath: directory.path
+            )
+            try? FileManager.default.removeItem(at: directory)
         }
 
+        let store = ProfileStore(fileURL: fileURL)
         XCTAssertTrue(
-            ProfileStore.shouldQuarantine(decodeError: decodeError),
-            "an undecodable profiles file must be moved aside, never overwritten"
+            store.profiles.isEmpty,
+            "a failed quarantine still falls back to an empty store"
+        )
+        XCTAssertEqual(
+            try Data(contentsOf: fileURL), garbage,
+            "a failed quarantine must leave the unreadable file in place"
+        )
+
+        let profile = DaemonProfile(
+            id: UUID(),
+            name: "vps",
+            baseURL: URL(string: "http://192.168.1.6:4020")!
+        )
+        XCTAssertThrowsError(try store.save(profile, token: "tok-\(UUID().uuidString)")) { error in
+            let nsError = error as NSError
+            XCTAssertEqual(nsError.domain, "ProfileStore")
+            XCTAssertEqual(nsError.code, 1)
+            XCTAssertTrue(
+                nsError.localizedDescription.contains("refusing to overwrite"),
+                "persist must refuse rather than overwrite the only copy — got \(nsError.localizedDescription)"
+            )
+        }
+        try? store.clearToken(for: profile.id)
+        XCTAssertEqual(
+            try Data(contentsOf: fileURL), garbage,
+            "the refused persist must not have overwritten the unreadable file"
         )
     }
 
@@ -148,6 +230,78 @@ final class WatchdogSeamTests: XCTestCase {
                 for: fileURL,
                 at: Date(timeIntervalSince1970: 1_700_000_001)
             )
+        )
+    }
+}
+
+/// `TerminalController.resumeAction(for:reconnectSuppressed:)` — the
+/// pure decision `resumeIfNeeded` dispatches on when the scene returns
+/// to the foreground. `.skip` must leave a classified failure's overlay
+/// and any in-flight/ended attach untouched; `.reconnecting` runs the
+/// already-scheduled attempt early; `.disconnected` starts a fresh
+/// bounded series.
+@MainActor
+final class ResumeSeamTests: XCTestCase {
+
+    private var allPhases: [TerminalController.Phase] {
+        [
+            .connecting,
+            .live,
+            .ended("session exited"),
+            .reconnecting("Reconnecting in 4s… (attempt 3/8)"),
+            .disconnected("The daemon closed the connection."),
+        ]
+    }
+
+    func testASuppressedReconnectSkipsEveryPhase() {
+        // A classified 401/404 owns its overlay — reattaching on resume
+        // would loop the same rejection, whatever the last phase was.
+        for phase in allPhases {
+            XCTAssertEqual(
+                TerminalController.resumeAction(for: phase, reconnectSuppressed: true),
+                .skip,
+                "reconnectSuppressed must win over \(phase)"
+            )
+        }
+    }
+
+    func testConnectingLiveAndEndedPhasesAreLeftUntouched() {
+        for phase in [
+            TerminalController.Phase.connecting,
+            .live,
+            .ended("session exited"),
+        ] {
+            XCTAssertEqual(
+                TerminalController.resumeAction(for: phase, reconnectSuppressed: false),
+                .skip,
+                "an in-flight or ended attach must not be superseded by a resume — \(phase)"
+            )
+        }
+    }
+
+    func testAReconnectingPhaseFastPathsTheScheduledAttempt() {
+        // The delay was chosen for a network that may already be back —
+        // resume runs the scheduled attempt early and keeps the counter.
+        XCTAssertEqual(
+            TerminalController.resumeAction(
+                for: .reconnecting("Reconnecting in 4s… (attempt 3/8)"),
+                reconnectSuppressed: false
+            ),
+            .fastPathRetry,
+            "a scheduled reconnect must run immediately without resetting the attempt counter"
+        )
+    }
+
+    func testADisconnectedPhaseStartsAFreshBoundedSeries() {
+        // Retries are already exhausted — resume begins a new bounded
+        // series (the attempt counter resets before attach()).
+        XCTAssertEqual(
+            TerminalController.resumeAction(
+                for: .disconnected("reconnect gave up"),
+                reconnectSuppressed: false
+            ),
+            .reattachNow,
+            "an exhausted reconnect must start a fresh bounded series"
         )
     }
 }
