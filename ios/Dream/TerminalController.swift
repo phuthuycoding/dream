@@ -140,13 +140,12 @@ final class TerminalController {
         attachToken = tokenProvider()
         guard let url = WSClient.attachURL(
             baseURL: baseURL,
-            sessionID: session.id,
-            token: attachToken
+            sessionID: session.id
         ) else {
             phase = .disconnected("The daemon's address is not a valid URL.")
             return
         }
-        let ws = WSClient(url: url)
+        let ws = WSClient(url: url, token: attachToken)
         ws.onOutput = { [weak self] bytes in
             self?.feed(bytes)
         }
@@ -192,10 +191,15 @@ final class TerminalController {
     }
 
     /// Foreground return (scenePhase → .active): iOS suspends sockets in
-    /// the background, so anything short of a proven-live attach gets a
-    /// fresh socket now — no backoff wait while the user is watching.
+    /// the background, so a settled transport drop gets a fresh socket
+    /// now — no backoff wait while the user is watching. Only
+    /// `.disconnected` qualifies: a `.connecting`/`.reconnecting` attach
+    /// is still in flight (superseding it would waste a handshake that
+    /// may be about to land), and a classified 401/404
+    /// (`reconnectSuppressed`) owns its overlay — reattaching loops the
+    /// same rejection.
     func resumeIfNeeded() {
-        guard !isEnded, phase != .live else { return }
+        guard !reconnectSuppressed, case .disconnected = phase else { return }
         reconnectAttempt = 0
         attach()
     }
@@ -207,11 +211,6 @@ final class TerminalController {
         attach()
     }
 
-    private var isEnded: Bool {
-        if case .ended = phase { return true }
-        return false
-    }
-
     /// The `e` overlay's affordance: `POST …/respawn`, then re-attach.
     func respawn() {
         phase = .connecting
@@ -221,6 +220,10 @@ final class TerminalController {
                 _ = try await client.respawnSession(id: session.id)
                 attach()
             } catch APIError.unauthorized(let token) {
+                // A rejected respawn must not leave the connecting
+                // spinner up forever — land on the same terminal phase
+                // a handshake 401 reports.
+                phase = .disconnected(APIError.unauthorized(token: token).userMessage)
                 onUnauthorized(token)
             } catch {
                 phase = .disconnected(APIError.describe(error))
