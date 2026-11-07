@@ -148,6 +148,217 @@ final class APIClientTests: XCTestCase {
         }
     }
 
+    // MARK: - Rejected-credential payload
+
+    /// The stale-401 guard clears the Keychain only when the stored
+    /// token still equals the rejected one — that comparison reads the
+    /// token the request itself carried, so the payload is the contract,
+    /// not just the case.
+    func testUnauthorizedErrorCarriesTheTokenTheRejectedRequestSent() async {
+        StubURLProtocol.requestHandler = respond(status: 401, body: "unauthorized")
+
+        do {
+            _ = try await makeClient().listSessions()
+            XCTFail("expected APIError.unauthorized")
+        } catch let error as APIError {
+            guard case .unauthorized(let rejected) = error else {
+                return XCTFail("expected APIError.unauthorized, got \(error)")
+            }
+            XCTAssertEqual(
+                rejected, token,
+                "the 401 must report the credential the request itself presented"
+            )
+        } catch {
+            XCTFail("expected APIError.unauthorized, got \(type(of: error)): \(error)")
+        }
+    }
+
+    func testUnauthorizedErrorCarriesNilWhenNoCredentialWasSent() async {
+        StubURLProtocol.requestHandler = respond(status: 401, body: "unauthorized")
+        let tokenlessClient = APIClient(
+            baseURL: baseURL,
+            tokenProvider: { nil },
+            urlSession: stubbedSession
+        )
+
+        do {
+            _ = try await tokenlessClient.listSessions()
+            XCTFail("expected APIError.unauthorized")
+        } catch let error as APIError {
+            guard case .unauthorized(let rejected) = error else {
+                return XCTFail("expected APIError.unauthorized, got \(error)")
+            }
+            XCTAssertNil(
+                rejected,
+                "a request that sent no credential must report nil — not a token re-fetched at throw time"
+            )
+        } catch {
+            XCTFail("expected APIError.unauthorized, got \(type(of: error)): \(error)")
+        }
+    }
+
+    // MARK: - Mutation endpoints
+
+    /// A minimal `DreamSession` payload for endpoints that answer with
+    /// a session.
+    private func sessionBody(id: String) -> String {
+        """
+        {
+          "id": "\(id)",
+          "name": "job",
+          "cmd": "zsh",
+          "cwd": "/work",
+          "setup_script": null,
+          "status": "Live",
+          "created_at": "2026-11-06T12:00:00Z",
+          "log_path": "/tmp/\(id).cast",
+          "resurrected": false,
+          "attention": false
+        }
+        """
+    }
+
+    /// URLSession may move the body onto `httpBodyStream` before the
+    /// protocol sees it — read whichever form carried the bytes.
+    private func requestBody(_ request: URLRequest) -> Data? {
+        if let body = request.httpBody { return body }
+        guard let stream = request.httpBodyStream else { return nil }
+        stream.open()
+        defer { stream.close() }
+        var data = Data()
+        let chunk = UnsafeMutablePointer<UInt8>.allocate(capacity: 4096)
+        defer { chunk.deallocate() }
+        while stream.hasBytesAvailable {
+            let read = stream.read(chunk, maxLength: 4096)
+            guard read > 0 else { break }
+            data.append(chunk, count: read)
+        }
+        return data.isEmpty ? nil : data
+    }
+
+    private func decodedBody(_ request: URLRequest) -> [String: Any]? {
+        guard let body = requestBody(request),
+              let dictionary = try? JSONSerialization.jsonObject(with: body) as? [String: Any]
+        else {
+            return nil
+        }
+        return dictionary
+    }
+
+    func testCreateSessionPostsTheEncodedFieldsToTheSessionsRoute() async throws {
+        var captured: URLRequest?
+        StubURLProtocol.requestHandler = respond(
+            status: 200,
+            body: sessionBody(id: "new-1")
+        ) { request in
+            captured = request
+        }
+
+        let session = try await makeClient().createSession(
+            name: "dev",
+            cmd: "zsh",
+            cwd: "/work",
+            setupScript: "make setup"
+        )
+
+        XCTAssertEqual(session.id, "new-1")
+        let request = try XCTUnwrap(captured)
+        XCTAssertEqual(request.httpMethod, "POST")
+        XCTAssertEqual(request.url?.path, "/api/sessions")
+        XCTAssertEqual(
+            request.value(forHTTPHeaderField: "Content-Type"),
+            "application/json"
+        )
+        let body = try XCTUnwrap(decodedBody(request), "create must send a JSON body")
+        XCTAssertEqual(body["name"] as? String, "dev")
+        XCTAssertEqual(body["cmd"] as? String, "zsh")
+        XCTAssertEqual(body["cwd"] as? String, "/work")
+        XCTAssertEqual(
+            body["setup_script"] as? String, "make setup",
+            "the setup script travels under the daemon's snake_case key"
+        )
+    }
+
+    func testUpdateSessionPatchesOnlyTheProvidedFields() async throws {
+        var captured: URLRequest?
+        StubURLProtocol.requestHandler = respond(
+            status: 200,
+            body: sessionBody(id: "s9")
+        ) { request in
+            captured = request
+        }
+
+        _ = try await makeClient().updateSession(id: "s9", name: "renamed")
+
+        let request = try XCTUnwrap(captured)
+        XCTAssertEqual(request.httpMethod, "PATCH")
+        XCTAssertEqual(request.url?.path, "/api/sessions/s9")
+        let body = try XCTUnwrap(decodedBody(request), "patch must send a JSON body")
+        XCTAssertEqual(body["name"] as? String, "renamed")
+        XCTAssertNil(body["cwd"], "absent keys leave the field untouched")
+        XCTAssertNil(body["setup_script"])
+    }
+
+    func testDeleteSessionIssuesDELETERequest() async throws {
+        var captured: URLRequest?
+        StubURLProtocol.requestHandler = respond(status: 200) { request in
+            captured = request
+        }
+
+        try await makeClient().deleteSession(id: "s9")
+
+        let request = try XCTUnwrap(captured)
+        XCTAssertEqual(request.httpMethod, "DELETE")
+        XCTAssertEqual(request.url?.path, "/api/sessions/s9")
+    }
+
+    func testKillSessionPostsToTheKillAction() async throws {
+        var captured: URLRequest?
+        StubURLProtocol.requestHandler = respond(
+            status: 200,
+            body: sessionBody(id: "s9")
+        ) { request in
+            captured = request
+        }
+
+        let session = try await makeClient().killSession(id: "s9")
+
+        XCTAssertEqual(session.id, "s9")
+        let request = try XCTUnwrap(captured)
+        XCTAssertEqual(request.httpMethod, "POST")
+        XCTAssertEqual(request.url?.path, "/api/sessions/s9/kill")
+    }
+
+    func testRespawnSessionPostsToTheRespawnAction() async throws {
+        var captured: URLRequest?
+        StubURLProtocol.requestHandler = respond(
+            status: 200,
+            body: sessionBody(id: "s9")
+        ) { request in
+            captured = request
+        }
+
+        let session = try await makeClient().respawnSession(id: "s9")
+
+        XCTAssertEqual(session.id, "s9")
+        let request = try XCTUnwrap(captured)
+        XCTAssertEqual(request.httpMethod, "POST")
+        XCTAssertEqual(request.url?.path, "/api/sessions/s9/respawn")
+    }
+
+    func testCleanSessionPostsToTheCleanAction() async throws {
+        var captured: URLRequest?
+        StubURLProtocol.requestHandler = respond(status: 200) { request in
+            captured = request
+        }
+
+        try await makeClient().cleanSession(id: "s9")
+
+        let request = try XCTUnwrap(captured)
+        XCTAssertEqual(request.httpMethod, "POST")
+        XCTAssertEqual(request.url?.path, "/api/sessions/s9/clean")
+    }
+
     /// Matches a single `APIError` case by name only, so payloads the
     /// implementation hangs off a case don't break the contract.
     private enum ExpectedError {
