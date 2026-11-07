@@ -226,6 +226,78 @@ Requires iOS 17+.
   they are driven by the app's ~15 s session poll, not a push channel.
   A killed app cannot notify.
 
+### Running the iOS UI tests
+
+The `DreamUITests` suite drives the app against real daemons on
+loopback (see `ios/DreamUITests/DreamUITestCase.swift` for the fixture
+contract):
+
+- `127.0.0.1:4161` — "primary" daemon, token `e2e-ui-token-alpha`
+- `127.0.0.1:4162` — "secondary" daemon, token `e2e-ui-token-beta`
+- `127.0.0.1:4171` — a transparent TCP proxy in front of the primary.
+  While `/tmp/dream-e2e/deny.flag` exists it answers `401` to new
+  connections instead of forwarding — that is how a stored token going
+  stale is exercised without restarting anything.
+
+Launch the fixture daemons from the repo root:
+
+```sh
+mkdir -p /tmp/dream-e2e
+target/debug/dream --port 4161 --auth-token e2e-ui-token-alpha \
+    --data-dir /tmp/dream-e2e/alpha &
+target/debug/dream --port 4162 --auth-token e2e-ui-token-beta \
+    --data-dir /tmp/dream-e2e/beta &
+```
+
+For the gate, any TCP forwarder that honors the flag works; this
+one-file Python proxy is enough (save as `/tmp/dream-e2e/gate.py`,
+run `python3 /tmp/dream-e2e/gate.py &`):
+
+```python
+import os, socket, threading
+
+FLAG = "/tmp/dream-e2e/deny.flag"
+DENIED = b"HTTP/1.1 401 Unauthorized\r\nContent-Length: 0\r\n\r\n"
+
+def pump(src, dst):
+    try:
+        while chunk := src.recv(65536):
+            dst.sendall(chunk)
+    except OSError:
+        pass
+    for s in (src, dst):
+        try: s.close()
+        except OSError: pass
+
+def handle(client):
+    if os.path.exists(FLAG):
+        client.recv(65536)
+        client.sendall(DENIED)
+        client.close()
+        return
+    upstream = socket.create_connection(("127.0.0.1", 4161))
+    threading.Thread(target=pump, args=(client, upstream), daemon=True).start()
+    pump(upstream, client)
+
+listener = socket.socket()
+listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+listener.bind(("127.0.0.1", 4171))
+listener.listen()
+while True:
+    client, _ = listener.accept()
+    threading.Thread(target=handle, args=(client,), daemon=True).start()
+```
+
+Then run the suite:
+
+```sh
+xcodebuild -project ios/Dream.xcodeproj -scheme DreamUITests \
+    -destination 'platform=iOS Simulator,name=iPhone 15' test
+```
+
+Unit tests (`DreamTests`) need no daemons:
+`xcodebuild -project ios/Dream.xcodeproj -scheme Dream -destination 'platform=iOS Simulator,name=iPhone 15' test`.
+
 ## Auto-start on macOS (launchd)
 
 `dream up` does this automatically — recommended. Manual recipe for custom setups: the agent must be label `com.dream.daemon` for `dream down`/`status` to manage it; use `launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.dream.daemon.plist` (modern verbs — not `load`), with logs at `~/Library/Logs/dream/{out,err}.log`. Under launchd the token is never printed to the log — it lives in the 0600 token file (`<data-dir>/token`), printed once on a TTY first run or reprinted with `dream url`.
