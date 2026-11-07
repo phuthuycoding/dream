@@ -1,19 +1,22 @@
+import ObjectiveC
 import XCTest
 import UserNotifications
 @testable import Dream
 
-/// The `AttentionCenter` edge detector against the real
-/// `UNUserNotificationCenter`: priming, foreign-profile drops,
+/// The `AttentionCenter` edge detector: priming, foreign-profile drops,
 /// re-priming on a profile switch, foreground suppression, and
-/// retraction on a true→false edge. There is no injected seam —
-/// `UNUserNotificationCenter.current()` is a singleton the class calls
-/// directly — so the pending/delivered request lists are the only
-/// observable state. An environment where the center cannot queue
-/// requests skips honestly rather than asserting nothing.
+/// retraction on a true→false edge. `UNUserNotificationCenter.current()`
+/// is a singleton the detector calls directly — there is no injected
+/// seam, and `add` fails outright without notification permission — so
+/// `NotificationCenterSpy` replaces the three request-facing methods the
+/// detector calls with a recorder. The detector's decisions are then
+/// observable synchronously, without SpringBoard granting anything; no
+/// assertion here depends on a banner actually being delivered.
 @MainActor
 final class AttentionCenterEdgeTests: XCTestCase {
     private var center: UNUserNotificationCenter!
     private var previousDelegate: UNUserNotificationCenterDelegate?
+    private var spy: NotificationCenterSpy!
     private let profileA = UUID()
     private let profileB = UUID()
 
@@ -22,33 +25,13 @@ final class AttentionCenterEdgeTests: XCTestCase {
         let center = UNUserNotificationCenter.current()
         self.center = center
         previousDelegate = center.delegate
-        center.removeAllPendingNotificationRequests()
-        center.removeAllDeliveredNotifications()
-
-        // Probe the seam: the detector's only observable output is a
-        // queued request — if this environment cannot queue one, the
-        // tests below would assert on nothing.
-        _ = try? await center.requestAuthorization(options: [.alert, .sound])
-        let probe = UNMutableNotificationContent()
-        probe.title = "probe"
-        do {
-            try await center.add(
-                UNNotificationRequest(identifier: "dream-edge-probe", content: probe, trigger: nil)
-            )
-        } catch {
-            throw XCTSkip("notification center rejected a probe request: \(error.localizedDescription)")
-        }
-        let queued = await notificationIdentifiers()
-        center.removePendingNotificationRequests(withIdentifiers: ["dream-edge-probe"])
-        center.removeDeliveredNotifications(withIdentifiers: ["dream-edge-probe"])
-        guard queued.contains("dream-edge-probe") else {
-            throw XCTSkip("notification center does not queue requests in this environment")
-        }
+        spy = NotificationCenterSpy()
+        spy.install()
     }
 
     override func tearDown() async throws {
-        center.removeAllPendingNotificationRequests()
-        center.removeAllDeliveredNotifications()
+        spy.uninstall()
+        spy = nil
         center.delegate = previousDelegate
         center = nil
         try await super.tearDown()
@@ -73,40 +56,27 @@ final class AttentionCenterEdgeTests: XCTestCase {
         )
     }
 
-    /// Pending plus delivered request identifiers — a nil-trigger
-    /// banner can land in either list depending on delivery timing.
-    private func notificationIdentifiers() async -> Set<String> {
-        let pending = await center.pendingNotificationRequests().map(\.identifier)
-        let delivered = await center.deliveredNotifications().map { $0.request.identifier }
-        return Set(pending + delivered)
+    /// Identifiers the detector asked the center to queue — a re-flag
+    /// under the same identifier replaces rather than stacks.
+    private var postedIDs: Set<String> {
+        Set(spy.requests.keys)
     }
 
-    /// `add(_:)` completes asynchronously — give any (erroneously)
-    /// posted banner time to land before asserting none did.
-    private func settledIdentifiers() async -> Set<String> {
-        try? await Task.sleep(for: .milliseconds(250))
-        return await notificationIdentifiers()
-    }
+    // MARK: - Delegate wiring
 
-    private func waitFor(_ id: String) async -> Bool {
-        for _ in 0..<40 {
-            if await notificationIdentifiers().contains(id) { return true }
-            try? await Task.sleep(for: .milliseconds(50))
-        }
-        return false
-    }
+    func testInitInstallsItselfAsNotificationCenterDelegate() {
+        let attention = AttentionCenter()
 
-    private func waitUntilAbsent(_ id: String) async -> Bool {
-        for _ in 0..<40 {
-            if await !notificationIdentifiers().contains(id) { return true }
-            try? await Task.sleep(for: .milliseconds(50))
-        }
-        return false
+        XCTAssertTrue(
+            center.delegate === attention,
+            "banner taps route through the center's delegate — the center must hold it"
+        )
+        XCTAssertNil(attention.requestedSessionID)
     }
 
     // MARK: - Priming
 
-    func testFirstObservationSeedsTheBaselineWithoutNotifying() async {
+    func testFirstObservationSeedsTheBaselineWithoutNotifying() {
         let attention = makeCenter(active: profileA)
 
         attention.observe([session("s1")], for: profileA)
@@ -114,29 +84,31 @@ final class AttentionCenterEdgeTests: XCTestCase {
         // would treat it as a fresh edge and post a banner.
         attention.observe([session("s1")], for: profileA)
 
-        let ids = await settledIdentifiers()
         XCTAssertFalse(
-            ids.contains("s1"),
+            postedIDs.contains("s1"),
             "a flag already set when observation starts is not a fresh edge"
         )
     }
 
-    func testFlagRisingAfterPrimingPostsABanner() async {
+    func testFlagRisingAfterPrimingPostsABanner() {
         let attention = makeCenter(active: profileA)
         attention.observe([], for: profileA)
 
         attention.observe([session("s1")], for: profileA)
 
-        let posted = await waitFor("s1")
-        XCTAssertTrue(
-            posted,
-            "a false→true edge must post a banner named by the session id"
+        guard let request = spy.requests["s1"] else {
+            return XCTFail("a false→true edge must post a banner named by the session id")
+        }
+        XCTAssertEqual(request.content.userInfo["sessionID"] as? String, "s1")
+        XCTAssertEqual(
+            request.content.userInfo["profileID"] as? String, profileA.uuidString,
+            "a tap landing after a profile switch must route to the owning daemon"
         )
     }
 
     // MARK: - Profile scoping
 
-    func testSnapshotForAnotherProfileIsDropped() async {
+    func testSnapshotForAnotherProfileIsDropped() {
         let attention = makeCenter(active: profileA)
         attention.observe([session("s1")], for: profileA) // primes {s1}
 
@@ -145,18 +117,17 @@ final class AttentionCenterEdgeTests: XCTestCase {
         attention.observe([session("s2")], for: profileB)
         attention.observe([session("s1")], for: profileA)
 
-        let ids = await settledIdentifiers()
         XCTAssertFalse(
-            ids.contains("s2"),
+            postedIDs.contains("s2"),
             "a foreign-profile snapshot must not fire its edges here"
         )
         XCTAssertFalse(
-            ids.contains("s1"),
+            postedIDs.contains("s1"),
             "a dropped snapshot must not rewrite the baseline — s1 was never a new edge"
         )
     }
 
-    func testProfileSwitchRePrimesTheBaseline() async {
+    func testProfileSwitchRePrimesTheBaseline() {
         let attention = makeCenter(active: profileA)
         attention.observe([session("s1")], for: profileA) // primes {s1}
         attention.activeProfileID = profileB
@@ -165,23 +136,26 @@ final class AttentionCenterEdgeTests: XCTestCase {
         // diffed against {s1} it would notify s2 as rising.
         attention.observe([session("s2")], for: profileB)
 
-        var ids = await settledIdentifiers()
         XCTAssertFalse(
-            ids.contains("s2"),
+            postedIDs.contains("s2"),
             "the first observation after a profile switch only re-primes"
         )
 
         // And the detector is live on the new profile afterwards.
         attention.observe([session("s2"), session("s3")], for: profileB)
-        let notified = await waitFor("s3")
-        XCTAssertTrue(notified, "a real rising edge on the new profile must still notify")
-        ids = await notificationIdentifiers()
-        XCTAssertFalse(ids.contains("s2"), "the primed flag itself never notified")
+        XCTAssertTrue(
+            postedIDs.contains("s3"),
+            "a real rising edge on the new profile must still notify"
+        )
+        XCTAssertFalse(
+            postedIDs.contains("s2"),
+            "the primed flag itself never notified"
+        )
     }
 
     // MARK: - Foreground suppression
 
-    func testForegroundedSessionEdgeIsSuppressedButStillSeeded() async {
+    func testForegroundedSessionEdgeIsSuppressedButStillSeeded() {
         let attention = makeCenter(active: profileA)
         attention.observe([], for: profileA)
 
@@ -193,28 +167,98 @@ final class AttentionCenterEdgeTests: XCTestCase {
         // second observation would re-fire s1 as a rising edge.
         attention.observe([session("s1")], for: profileA)
 
-        let ids = await settledIdentifiers()
         XCTAssertFalse(
-            ids.contains("s1"),
+            postedIDs.contains("s1"),
             "the foregrounded terminal's edge is suppressed — the attach already acked its flag"
         )
     }
 
     // MARK: - Retraction
 
-    func testClearedFlagRetractsItsBanner() async {
+    func testClearedFlagRetractsItsBanner() {
         let attention = makeCenter(active: profileA)
         attention.observe([], for: profileA)
         attention.observe([session("s1")], for: profileA)
-        let posted = await waitFor("s1")
-        XCTAssertTrue(posted, "fixture: the rising edge must have posted")
+        XCTAssertNotNil(
+            spy.requests["s1"],
+            "fixture: the rising edge must have posted"
+        )
 
         attention.observe([session("s1", attention: false)], for: profileA)
 
-        let retracted = await waitUntilAbsent("s1")
-        XCTAssertTrue(
-            retracted,
-            "a true→false edge must retract the pending and delivered banner"
+        XCTAssertFalse(
+            postedIDs.contains("s1"),
+            "a true→false edge must retract the queued banner"
         )
+        XCTAssertTrue(
+            spy.removedPending.contains("s1") && spy.removedDelivered.contains("s1"),
+            "retraction must clear the session id from both pending and delivered"
+        )
+    }
+}
+
+/// Records the `UNUserNotificationCenter` calls `AttentionCenter` can
+/// make — a post, and pending/delivered retraction — by replacing the
+/// method implementations on the singleton for one test's duration.
+/// The center has no init seam and rejects queued requests without
+/// notification permission, so swizzling is the only way to observe the
+/// detector's decisions deterministically. `install`/`uninstall` must
+/// bracket exactly one test at a time.
+private final class NotificationCenterSpy {
+    /// Requests the center accepted, keyed by identifier — the pending
+    /// list, where a re-add under the same identifier replaces.
+    private(set) var requests: [String: UNNotificationRequest] = [:]
+    /// Identifiers handed to pending-request removal, in call order.
+    private(set) var removedPending: [String] = []
+    /// Identifiers handed to delivered-notification removal, in call order.
+    private(set) var removedDelivered: [String] = []
+
+    /// Original implementations to hand back on `uninstall`.
+    private var originals: [(method: Method, implementation: IMP)] = []
+    /// The trampoline blocks — must outlive the swizzled IMPs.
+    private var blocks: [Any] = []
+
+    func install() {
+        let post: @convention(block) (
+            UNUserNotificationCenter, UNNotificationRequest,
+            (@convention(block) (NSError?) -> Void)?
+        ) -> Void = { _, request, completion in
+            self.requests[request.identifier] = request
+            completion?(nil)
+        }
+        replace("addNotificationRequest:withCompletionHandler:", block: post)
+
+        let retractPending: @convention(block) (UNUserNotificationCenter, NSArray) -> Void = { _, ids in
+            let ids = ids.compactMap { $0 as? String }
+            self.removedPending.append(contentsOf: ids)
+            for id in ids {
+                self.requests.removeValue(forKey: id)
+            }
+        }
+        replace("removePendingNotificationRequestsWithIdentifiers:", block: retractPending)
+
+        let retractDelivered: @convention(block) (UNUserNotificationCenter, NSArray) -> Void = { _, ids in
+            self.removedDelivered.append(contentsOf: ids.compactMap { $0 as? String })
+        }
+        replace("removeDeliveredNotificationsWithIdentifiers:", block: retractDelivered)
+    }
+
+    func uninstall() {
+        for (method, implementation) in originals.reversed() {
+            method_setImplementation(method, implementation)
+        }
+        originals.removeAll()
+        blocks.removeAll()
+    }
+
+    private func replace(_ selectorName: String, block: Any) {
+        let selector = NSSelectorFromString(selectorName)
+        guard let method = class_getInstanceMethod(UNUserNotificationCenter.self, selector) else {
+            XCTFail("UNUserNotificationCenter does not respond to \(selectorName) — the spy cannot observe it")
+            return
+        }
+        blocks.append(block)
+        let previous = method_setImplementation(method, imp_implementationWithBlock(block))
+        originals.append((method, previous))
     }
 }

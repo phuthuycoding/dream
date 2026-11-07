@@ -7,6 +7,10 @@ import XCTest
 /// files, or the encoded profile itself.
 final class ProfileStoreTests: XCTestCase {
     private var store: ProfileStore!
+    /// Throwaway profiles.json — the store's default URL is the host
+    /// app's real Application Support file, shared with the dev's
+    /// paired profiles.
+    private var fileURL: URL!
     /// Profiles created by the running test, deleted on teardown.
     private var createdProfileIDs: [UUID] = []
     /// Tokens issued by the running test so teardown can scrub leftover
@@ -15,7 +19,9 @@ final class ProfileStoreTests: XCTestCase {
 
     override func setUp() {
         super.setUp()
-        store = ProfileStore()
+        fileURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("dream-profilestore-tests-\(UUID().uuidString).json")
+        store = ProfileStore(fileURL: fileURL)
     }
 
     override func tearDownWithError() throws {
@@ -29,6 +35,10 @@ final class ProfileStoreTests: XCTestCase {
         store.activeProfileId = nil
         purgeIssuedTokensFromKeychain()
         store = nil
+        if let fileURL, FileManager.default.fileExists(atPath: fileURL.path) {
+            try FileManager.default.removeItem(at: fileURL)
+        }
+        fileURL = nil
         try super.tearDownWithError()
     }
 
@@ -57,7 +67,7 @@ final class ProfileStoreTests: XCTestCase {
         let token = issueToken()
         try saveAndTrack(profile, token: token)
 
-        let reloaded = ProfileStore()
+        let reloaded = ProfileStore(fileURL: fileURL)
         XCTAssertTrue(
             reloaded.profiles.contains(where: { $0.id == profile.id }),
             "a fresh store instance must list the persisted profile"
@@ -107,7 +117,7 @@ final class ProfileStoreTests: XCTestCase {
         XCTAssertTrue(ids.contains(first.id), "the previously active profile must remain listed")
         XCTAssertTrue(ids.contains(second.id), "the active profile must remain listed")
         XCTAssertEqual(
-            ProfileStore().activeProfileId, second.id,
+            ProfileStore(fileURL: fileURL).activeProfileId, second.id,
             "the active pointer must persist across store instances"
         )
     }
