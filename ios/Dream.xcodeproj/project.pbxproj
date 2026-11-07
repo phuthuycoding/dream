@@ -30,6 +30,9 @@
 		1A0000000000000000000A65 /* ReconnectPolicyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A0000000000000000000A62 /* ReconnectPolicyTests.swift */; };
 		1A0000000000000000000A66 /* AppStateUnauthorizedTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A0000000000000000000A63 /* AppStateUnauthorizedTests.swift */; };
 		1A0000000000000000000A67 /* WSClientUpgradeClassificationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A0000000000000000000A64 /* WSClientUpgradeClassificationTests.swift */; };
+		1A0000000000000000000A68 /* WSClientAttachURLTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A0000000000000000000A6B /* WSClientAttachURLTests.swift */; };
+		1A0000000000000000000A69 /* AttentionCenterEdgeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A0000000000000000000A6C /* AttentionCenterEdgeTests.swift */; };
+		1A0000000000000000000A6A /* SnapshotPayloadHelpersTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A0000000000000000000A6D /* SnapshotPayloadHelpersTests.swift */; };
 		1A0000000000000000000A5C /* Frame.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A0000000000000000000A36 /* Frame.swift */; };
 		1A0000000000000000000A5D /* WSClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A0000000000000000000A37 /* WSClient.swift */; };
 		1A0000000000000000000A5E /* TerminalController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A0000000000000000000A38 /* TerminalController.swift */; };
@@ -90,6 +93,9 @@
 		1A0000000000000000000A62 /* ReconnectPolicyTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReconnectPolicyTests.swift; sourceTree = "<group>"; };
 		1A0000000000000000000A63 /* AppStateUnauthorizedTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppStateUnauthorizedTests.swift; sourceTree = "<group>"; };
 		1A0000000000000000000A64 /* WSClientUpgradeClassificationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WSClientUpgradeClassificationTests.swift; sourceTree = "<group>"; };
+		1A0000000000000000000A6B /* WSClientAttachURLTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WSClientAttachURLTests.swift; sourceTree = "<group>"; };
+		1A0000000000000000000A6C /* AttentionCenterEdgeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AttentionCenterEdgeTests.swift; sourceTree = "<group>"; };
+		1A0000000000000000000A6D /* SnapshotPayloadHelpersTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SnapshotPayloadHelpersTests.swift; sourceTree = "<group>"; };
 		1A0000000000000000000A05 /* Dream.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Dream.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		1A0000000000000000000A06 /* DreamTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = DreamTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		1B0000000000000000000B20 /* DreamUITestCase.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DreamUITestCase.swift; sourceTree = "<group>"; };
@@ -175,6 +181,9 @@
 				1A0000000000000000000A62 /* ReconnectPolicyTests.swift */,
 				1A0000000000000000000A63 /* AppStateUnauthorizedTests.swift */,
 				1A0000000000000000000A64 /* WSClientUpgradeClassificationTests.swift */,
+				1A0000000000000000000A6B /* WSClientAttachURLTests.swift */,
+				1A0000000000000000000A6C /* AttentionCenterEdgeTests.swift */,
+				1A0000000000000000000A6D /* SnapshotPayloadHelpersTests.swift */,
 			);
 			path = DreamTests;
 			sourceTree = "<group>";
@@ -371,6 +380,9 @@
 				1A0000000000000000000A65 /* ReconnectPolicyTests.swift in Sources */,
 				1A0000000000000000000A66 /* AppStateUnauthorizedTests.swift in Sources */,
 				1A0000000000000000000A67 /* WSClientUpgradeClassificationTests.swift in Sources */,
+				1A0000000000000000000A68 /* WSClientAttachURLTests.swift in Sources */,
+				1A0000000000000000000A69 /* AttentionCenterEdgeTests.swift in Sources */,
+				1A0000000000000000000A6A /* SnapshotPayloadHelpersTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -528,6 +540,7 @@
 				DEVELOPMENT_TEAM = "";
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "Dream connects to a terminal daemon on your local network.";
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
@@ -554,6 +567,7 @@
 				DEVELOPMENT_TEAM = "";
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "Dream connects to a terminal daemon on your local network.";
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";

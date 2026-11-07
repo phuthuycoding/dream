@@ -41,6 +41,18 @@ struct SessionFormView: View {
                         .autocorrectionDisabled()
                         .accessibilityIdentifier("sessionform.setup")
                 }
+                if editing != nil {
+                    // The PATCH API has no "clear this field" — an
+                    // absent key leaves the stored value (and an empty
+                    // string would store emptiness, not absence), so a
+                    // blanked field honestly means "unchanged". Same
+                    // limitation as the web edit modal.
+                    Section {
+                        Text("Leaving a field blank keeps its current value — fields cannot be cleared.")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                    }
+                }
                 if let errorMessage {
                     Section {
                         Text(errorMessage)
