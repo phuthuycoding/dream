@@ -35,6 +35,10 @@ final class ProfileStore {
 
     private let keychain: KeychainTokenStore
     private let fileURL: URL
+    /// Set when the persisted file existed, would not decode, and the
+    /// quarantine move failed — persist() must refuse rather than
+    /// overwrite the only copy.
+    private var persistenceBlocked = false
 
     init(
         keychain: KeychainTokenStore = KeychainTokenStore(),
@@ -131,11 +135,31 @@ final class ProfileStore {
             profiles = state.profiles
             activeProfileId = state.activeProfileId
         } catch {
-            NSLog("ProfileStore: ignoring undecodable profile file at \(fileURL.path): \(error)")
+            // An undecodable file must be moved aside before the store
+            // starts empty — the next save/write would otherwise
+            // overwrite it and orphan the Keychain tokens of every
+            // profile it held.
+            let quarantined = fileURL.appendingPathExtension(
+                "corrupt-\(Int(Date().timeIntervalSince1970))"
+            )
+            do {
+                try FileManager.default.moveItem(at: fileURL, to: quarantined)
+                NSLog("ProfileStore: quarantined undecodable profile file as \(quarantined.lastPathComponent): \(error)")
+            } catch {
+                persistenceBlocked = true
+                NSLog("ProfileStore: undecodable profile file at \(fileURL.path) could not be quarantined: \(error)")
+            }
         }
     }
 
     private func persist() throws {
+        guard !persistenceBlocked else {
+            throw NSError(
+                domain: "ProfileStore", code: 1,
+                userInfo: [NSLocalizedDescriptionKey:
+                    "refusing to overwrite the unreadable profiles file at \(fileURL.path)"]
+            )
+        }
         let state = PersistedState(profiles: profiles, activeProfileId: activeProfileId)
         let data = try JSONEncoder().encode(state)
         try FileManager.default.createDirectory(
