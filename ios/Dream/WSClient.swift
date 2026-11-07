@@ -1,5 +1,43 @@
 import Foundation
 
+/// The `o`/`s`/`e` receive-sequencing decision as a pure, testable
+/// shape — `handle(_:)` routes every decoded frame through `action`
+/// and performs only what the returned action says, so the ordering
+/// rules (buffer `o` as scrollback until the first `s`, deliver live
+/// after it, flush held replay on `e`) are pinned without a socket.
+enum AttachSequencer {
+    /// What one decoded server frame does to the attach sequence.
+    enum Action: Equatable {
+        /// `o` after the first `s` — live pty bytes; deliver now.
+        case deliverOutput(Data)
+        /// `o` before the first `s` — scrollback replay; hold it.
+        case bufferScrollback(Data)
+        /// `s` — apply the payload with whatever scrollback is held.
+        case applySnapshot(Data)
+        /// `e` — flush held replay, then report the notice text.
+        case flushEnd(Data)
+        /// `a` — the session wants attention.
+        case attention
+        /// Client opcodes (`i`, `r`) the server never sends — drop.
+        case drop
+    }
+
+    static func action(for frame: Frame, snapshotApplied: Bool) -> Action {
+        switch frame {
+        case .output(let payload):
+            return snapshotApplied ? .deliverOutput(payload) : .bufferScrollback(payload)
+        case .snapshot(let payload):
+            return .applySnapshot(payload)
+        case .end(let payload):
+            return .flushEnd(payload)
+        case .attention:
+            return .attention
+        case .input, .resize:
+            return .drop
+        }
+    }
+}
+
 /// WebSocket attach client for one daemon session. Wraps a single
 /// `URLSessionWebSocketTask` on `ws(s)://<base>/api/sessions/<id>/ws`
 /// and owns the attach-ordering rules of `src/ws/attach.rs`, mirroring
@@ -50,6 +88,16 @@ final class WSClient: NSObject {
     /// Keepalive — a dead socket that never reported an error still
     /// answers the ping timeout. Not protocol state.
     private var pingTimer: Timer?
+    /// Last proof the peer is alive: a received frame or an answered
+    /// pong. The daemon sends nothing on an idle session, so data
+    /// frames alone can't stand in for liveness — the pong stamps it
+    /// too. Armed by the first completed receive.
+    private var lastReceiveAt = Date.distantPast
+    /// Keepalive cadence, in seconds.
+    private static let pingInterval: TimeInterval = 15
+    /// Silence past ~2 ping intervals means a half-open socket: the
+    /// writes were accepted, but nothing — frames or pongs — comes back.
+    private static let livenessWindow: TimeInterval = 31
 
     init(url: URL, token: String? = nil) {
         self.url = url
@@ -98,15 +146,33 @@ final class WSClient: NSObject {
     }
 
     /// ~15s keepalive — silent stalls (a suspend or a dead route) are
-    /// reported through the pong error, not left hanging forever. Armed
-    /// by the first completed receive, i.e. after the handshake has
-    /// actually finished; idempotent across frames.
+    /// reported through the pong error and the `lastReceiveAt`
+    /// watchdog, not left hanging forever. Armed by the first
+    /// completed receive, i.e. after the handshake has actually
+    /// finished; idempotent across frames.
     private func armPingTimer() {
         guard !finished, pingTimer == nil else { return }
-        pingTimer = Timer.scheduledTimer(withTimeInterval: 15, repeats: true) { [weak self] _ in
-            self?.task?.sendPing { [weak self] error in
+        pingTimer = Timer.scheduledTimer(
+            withTimeInterval: Self.pingInterval,
+            repeats: true
+        ) { [weak self] _ in
+            guard let self else { return }
+            // Half-open watchdog: the ping's handler reports send-side
+            // errors only — a route that takes the bytes but answers
+            // nothing back would stay `.live` forever. Two intervals
+            // without a frame or a pong is dead.
+            if -self.lastReceiveAt.timeIntervalSinceNow > Self.livenessWindow {
+                self.finish(error: URLError(.networkConnectionLost))
+                return
+            }
+            self.task?.sendPing { [weak self] error in
+                guard let self else { return }
                 if let error {
-                    self?.finish(error: error)
+                    self.finish(error: error)
+                } else {
+                    // The pongReceiveHandler fires on the peer's pong —
+                    // proof of life on an otherwise idle socket.
+                    self.lastReceiveAt = Date()
                 }
             }
         }
@@ -145,6 +211,7 @@ final class WSClient: NSObject {
             guard let self, !self.finished else { return }
             switch result {
             case .success(let message):
+                self.lastReceiveAt = Date()
                 // A completed receive means the upgrade finished — the
                 // keepalive only makes sense on a live socket.
                 self.armPingTimer()
@@ -167,26 +234,24 @@ final class WSClient: NSObject {
 
     private func handle(_ data: Data) {
         guard let frame = Frame.decode(data) else { return }
-        switch frame {
-        case .output(let payload):
-            if snapshotApplied {
-                onOutput(payload)
-            } else {
-                pendingOutput.append(payload)
-            }
-        case .snapshot(let payload):
+        switch AttachSequencer.action(for: frame, snapshotApplied: snapshotApplied) {
+        case .deliverOutput(let payload):
+            onOutput(payload)
+        case .bufferScrollback(let payload):
+            pendingOutput.append(payload)
+        case .applySnapshot(let payload):
             let scrollback = pendingOutput
             pendingOutput.removeAll()
             snapshotApplied = true
             onSnapshot(scrollback, payload)
-        case .end(let payload):
+        case .flushEnd(let payload):
             // Dead-session attach: the replayed `o` frames arrive without
             // a snapshot — flush them so the final screen shows.
             flushPending()
             onEnd(String(decoding: payload, as: UTF8.self))
         case .attention:
             onAttention()
-        case .input, .resize:
+        case .drop:
             break // server never sends client opcodes — drop
         }
     }

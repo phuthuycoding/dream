@@ -192,16 +192,28 @@ final class TerminalController {
 
     /// Foreground return (scenePhase → .active): iOS suspends sockets in
     /// the background, so a settled transport drop gets a fresh socket
-    /// now — no backoff wait while the user is watching. Only
-    /// `.disconnected` qualifies: a `.connecting`/`.reconnecting` attach
-    /// is still in flight (superseding it would waste a handshake that
-    /// may be about to land), and a classified 401/404
-    /// (`reconnectSuppressed`) owns its overlay — reattaching loops the
+    /// now — no backoff wait while the user is watching. `.disconnected`
+    /// starts a fresh bounded series; `.reconnecting` fast-paths the
+    /// already-scheduled attempt (a delay chosen for a network that may
+    /// already be back shouldn't keep the user waiting). A
+    /// `.connecting`/`.live`/`.ended` attach is untouched — superseding
+    /// an in-flight handshake would waste it — and a classified 401/404
+    /// (`reconnectSuppressed`) owns its overlay: reattaching loops the
     /// same rejection.
     func resumeIfNeeded() {
-        guard !reconnectSuppressed, case .disconnected = phase else { return }
-        reconnectAttempt = 0
-        attach()
+        guard !reconnectSuppressed else { return }
+        switch phase {
+        case .disconnected:
+            reconnectAttempt = 0
+            attach()
+        case .reconnecting:
+            // attach() cancels the pending reconnectTask itself; the
+            // attempt counter keeps its place — this is the scheduled
+            // retry run early, not a new series.
+            attach()
+        case .connecting, .live, .ended:
+            break
+        }
     }
 
     /// The overlay's manual retry — a fresh bounded series, same as a
@@ -277,13 +289,9 @@ final class TerminalController {
             // the protocol asks for after a snapshot goes out there.
             view.resize(cols: geometry.cols, rows: geometry.rows)
         }
-        if payload.starts(with: Self.ris) {
-            view.feed(byteArray: ArraySlice(Self.ris))
-        }
-        for chunk in scrollback {
+        for chunk in Self.snapshotFeedSequence(scrollback: scrollback, payload: payload) {
             view.feed(byteArray: ArraySlice(chunk))
         }
-        view.feed(byteArray: ArraySlice(Self.strippingLeadingRIS(payload)))
         // A completed attach contract resets the backoff counter — the
         // next drop starts again from the floor.
         reconnectAttempt = 0
@@ -293,6 +301,22 @@ final class TerminalController {
     /// `ESC c` — the full reset `src/vt/snapshot.rs` build() writes as
     /// the snapshot's first bytes.
     private static let ris: [UInt8] = [0x1B, 0x63]
+
+    /// The ordered feed chunks `applySnapshot` paints for one `s`
+    /// payload — a pure shape so the RIS-first ordering is pinned
+    /// without a terminal view: the payload's own RIS goes first (it
+    /// clears stale modes before anything repaints), then the scrollback
+    /// replay, then the payload minus its leading RIS (re-feeding it
+    /// after the replay would wipe the scrollback just restored).
+    static func snapshotFeedSequence(scrollback: [Data], payload: Data) -> [Data] {
+        var chunks: [Data] = []
+        if payload.starts(with: ris) {
+            chunks.append(Data(ris))
+        }
+        chunks.append(contentsOf: scrollback)
+        chunks.append(strippingLeadingRIS(payload))
+        return chunks
+    }
 
     /// Drop the snapshot's leading `\x1bc` (RIS) from the payload:
     /// `applySnapshot` already feeds that reset itself, ahead of the
