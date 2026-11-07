@@ -3,7 +3,7 @@
 
 use std::fs;
 use std::io::Write;
-use std::net::{IpAddr, Ipv4Addr, TcpStream, ToSocketAddrs};
+use std::net::{TcpStream, ToSocketAddrs};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
@@ -292,13 +292,14 @@ fn routable_ipv4() -> Option<String> {
     }
 }
 
-/// admin_host for PRINTED URLs: an IPv4 wildcard bind pasted into a phone
+/// admin_host for PRINTED URLs: a wildcard bind pasted into a phone
 /// points at loopback — unreachable. Print the routable LAN IPv4
-/// instead so the pairing line works off-host. Only `0.0.0.0` gets that
-/// substitution: a `--bind ::` listener is IPv6-only, so a printed IPv4
-/// address would be just as unreachable as loopback.
+/// instead so the pairing line works off-host. Both wildcards get that
+/// substitution: `--bind ::` is dual-stack on the platforms dream
+/// targets (admin_host already maps it to 127.0.0.1), so its listener
+/// answers the printed IPv4 the same way `0.0.0.0` does.
 fn url_host_display(cfg: &Config) -> String {
-    if cfg.bind == IpAddr::V4(Ipv4Addr::UNSPECIFIED) {
+    if cfg.bind.is_unspecified() {
         if let Some(lan) = routable_ipv4() {
             return lan;
         }
@@ -1016,5 +1017,85 @@ mod tests {
         assert!(s.starts_with("gui/"));
         assert!(s.ends_with("/com.dream.daemon"));
         assert!(!s.contains(' '));
+    }
+}
+
+/// The substitution matrix behind printed pairing URLs: which bind
+/// address gets rewritten and which prints as-is. `routable_ipv4()`
+/// does a real UDP connect, so on a host with no LAN route it returns
+/// `None` — the assertions below accept that documented fallback
+/// rather than requiring network access.
+#[cfg(test)]
+mod url_host_tests {
+    use super::*;
+    use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+    use std::path::PathBuf;
+
+    use crate::config::Config;
+
+    fn cfg_bound_to(bind: IpAddr) -> Config {
+        Config {
+            port: 4020,
+            bind,
+            data_dir: PathBuf::from("/tmp/dream-test"),
+            auth_token: None,
+            github_oauth: None,
+            public: false,
+            log_cap: None,
+            log_max_age: None,
+        }
+    }
+
+    #[test]
+    fn ipv4_wildcard_prints_lan_ip_or_loopback_fallback() {
+        let display = url_host_display(&cfg_bound_to(IpAddr::V4(Ipv4Addr::UNSPECIFIED)));
+        // The wildcard itself is never a usable remote address — a
+        // printed "0.0.0.0" would have the phone dial its own loopback.
+        assert_ne!(display, "0.0.0.0");
+        match routable_ipv4() {
+            Some(lan) => assert_eq!(display, lan),
+            // No LAN route: the documented fallback is loopback, same
+            // as admin_host gives any unspecified bind.
+            None => assert_eq!(display, "127.0.0.1"),
+        }
+    }
+
+    #[test]
+    fn ipv6_wildcard_prints_lan_ip_or_loopback_fallback() {
+        // `--bind ::` is dual-stack on the supported platforms, so its
+        // listener answers the printed LAN IPv4 the way `0.0.0.0` does.
+        let display = url_host_display(&cfg_bound_to(IpAddr::V6(Ipv6Addr::UNSPECIFIED)));
+        // Never the wildcard in any printable form.
+        assert_ne!(display, "::");
+        assert_ne!(display, "[::]");
+        match routable_ipv4() {
+            Some(lan) => assert_eq!(display, lan),
+            None => assert_eq!(display, "127.0.0.1"),
+        }
+    }
+
+    #[test]
+    fn specific_bind_prints_itself() {
+        let display = url_host_display(&cfg_bound_to("192.168.1.5".parse().unwrap()));
+        assert_eq!(display, "192.168.1.5");
+    }
+
+    #[test]
+    fn loopback_bind_prints_loopback() {
+        let display = url_host_display(&cfg_bound_to(IpAddr::V4(Ipv4Addr::LOCALHOST)));
+        assert_eq!(display, "127.0.0.1");
+    }
+
+    #[test]
+    fn routable_ipv4_is_never_wildcard_or_loopback() {
+        // On a host with no outbound route this returns None and the
+        // pairing URL prints loopback — acceptable; skip the checks.
+        if let Some(ip) = routable_ipv4() {
+            let parsed: Ipv4Addr = ip
+                .parse()
+                .expect("routable_ipv4 must return an IPv4 literal");
+            assert!(!parsed.is_unspecified());
+            assert!(!parsed.is_loopback());
+        }
     }
 }
