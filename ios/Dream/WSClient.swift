@@ -38,6 +38,10 @@ final class WSClient: NSObject {
     var onClose: (Error?) -> Void = { _ in }
 
     private let url: URL
+    /// Bearer credential for the upgrade's `Authorization` header — the
+    /// daemon's gate checks it ahead of `?token=`, so the token never
+    /// enters the URL where proxies and access logs would record it.
+    private let token: String?
     private var session: URLSession?
     private var task: URLSessionWebSocketTask?
     private var pendingOutput: [Data] = []
@@ -47,15 +51,15 @@ final class WSClient: NSObject {
     /// answers the ping timeout. Not protocol state.
     private var pingTimer: Timer?
 
-    init(url: URL) {
+    init(url: URL, token: String? = nil) {
         self.url = url
+        self.token = token
     }
 
-    /// The attach URL for one session. `?token=` is the only credential
-    /// form the server gate accepts on this route from a client that
-    /// cannot set `Authorization` on the upgrade — and it is sent only
-    /// when a token exists, never as an empty credential.
-    static func attachURL(baseURL: URL, sessionID: String, token: String?) -> URL? {
+    /// The attach URL for one session — no credentials in it: the
+    /// token travels on the upgrade's `Authorization` header instead,
+    /// which `is_authorized` (src/http/middleware.rs) checks first.
+    static func attachURL(baseURL: URL, sessionID: String) -> URL? {
         // Append like APIClient.sessionURL — a path-prefixed baseURL
         // (daemon behind a reverse proxy at e.g. https://host/dream/)
         // must keep its prefix or every attach misses the route.
@@ -70,16 +74,20 @@ final class WSClient: NSObject {
         components.scheme = components.scheme == "https" ? "wss" : "ws"
         components.queryItems = nil
         components.fragment = nil
-        if let token, !token.isEmpty {
-            components.queryItems = [URLQueryItem(name: "token", value: token)]
-        }
         return components.url
     }
 
     func connect() {
         guard task == nil else { return }
+        // The upgrade is a URLRequest precisely so the bearer can ride
+        // its Authorization header — `?token=` stays supported by the
+        // daemon for browser clients that cannot set headers.
+        var request = URLRequest(url: url)
+        if let token, !token.isEmpty {
+            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        }
         let session = URLSession(configuration: .default, delegate: self, delegateQueue: .main)
-        let task = session.webSocketTask(with: url)
+        let task = session.webSocketTask(with: request)
         self.session = session
         self.task = task
         task.resume()
