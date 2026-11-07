@@ -1,0 +1,740 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 56;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		1A0000000000000000000A40 /* DreamApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A0000000000000000000A20 /* DreamApp.swift */; };
+		1A0000000000000000000A41 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A0000000000000000000A21 /* ContentView.swift */; };
+		1A0000000000000000000A42 /* PairingURLParser.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A0000000000000000000A22 /* PairingURLParser.swift */; };
+		1A0000000000000000000A43 /* DaemonProfile.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A0000000000000000000A23 /* DaemonProfile.swift */; };
+		1A0000000000000000000A44 /* ProfileStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A0000000000000000000A24 /* ProfileStore.swift */; };
+		1A0000000000000000000A45 /* DreamSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A0000000000000000000A25 /* DreamSession.swift */; };
+		1A0000000000000000000A46 /* APIClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A0000000000000000000A26 /* APIClient.swift */; };
+		1A0000000000000000000A47 /* KeychainTokenStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A0000000000000000000A27 /* KeychainTokenStore.swift */; };
+		1A0000000000000000000A48 /* SwiftTerm in Frameworks */ = {isa = PBXBuildFile; productRef = 1A0000000000000000000A15 /* SwiftTerm */; };
+		1A0000000000000000000A50 /* APIClientTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A0000000000000000000A30 /* APIClientTests.swift */; };
+		1A0000000000000000000A51 /* DreamSessionDecodingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A0000000000000000000A31 /* DreamSessionDecodingTests.swift */; };
+		1A0000000000000000000A52 /* PairingURLParserTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A0000000000000000000A32 /* PairingURLParserTests.swift */; };
+		1A0000000000000000000A53 /* ProfileStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A0000000000000000000A33 /* ProfileStoreTests.swift */; };
+		1A0000000000000000000A54 /* StubURLProtocol.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A0000000000000000000A34 /* StubURLProtocol.swift */; };
+		1A0000000000000000000A55 /* AppState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A0000000000000000000A28 /* AppState.swift */; };
+		1A0000000000000000000A56 /* PairingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A0000000000000000000A29 /* PairingView.swift */; };
+		1A0000000000000000000A57 /* ProfileListView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A0000000000000000000A2A /* ProfileListView.swift */; };
+		1A0000000000000000000A58 /* SessionListView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A0000000000000000000A2B /* SessionListView.swift */; };
+		1A0000000000000000000A59 /* SessionFormView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A0000000000000000000A2C /* SessionFormView.swift */; };
+		1A0000000000000000000A5B /* FrameCodecTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A0000000000000000000A35 /* FrameCodecTests.swift */; };
+		1A0000000000000000000A65 /* ReconnectPolicyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A0000000000000000000A62 /* ReconnectPolicyTests.swift */; };
+		1A0000000000000000000A66 /* AppStateUnauthorizedTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A0000000000000000000A63 /* AppStateUnauthorizedTests.swift */; };
+		1A0000000000000000000A67 /* WSClientUpgradeClassificationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A0000000000000000000A64 /* WSClientUpgradeClassificationTests.swift */; };
+		1A0000000000000000000A68 /* WSClientAttachURLTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A0000000000000000000A6B /* WSClientAttachURLTests.swift */; };
+		1A0000000000000000000A69 /* AttentionCenterEdgeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A0000000000000000000A6C /* AttentionCenterEdgeTests.swift */; };
+		1A0000000000000000000A6A /* SnapshotPayloadHelpersTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A0000000000000000000A6D /* SnapshotPayloadHelpersTests.swift */; };
+		1A0000000000000000000A6E /* AttachSequencerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A0000000000000000000A6F /* AttachSequencerTests.swift */; };
+		1A0000000000000000000A70 /* SnapshotFeedSequenceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A0000000000000000000A71 /* SnapshotFeedSequenceTests.swift */; };
+		1A0000000000000000000A73 /* WatchdogSeamTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A0000000000000000000A72 /* WatchdogSeamTests.swift */; };
+		1A0000000000000000000A5C /* Frame.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A0000000000000000000A36 /* Frame.swift */; };
+		1A0000000000000000000A5D /* WSClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A0000000000000000000A37 /* WSClient.swift */; };
+		1A0000000000000000000A5E /* TerminalController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A0000000000000000000A38 /* TerminalController.swift */; };
+		1A0000000000000000000A5F /* TerminalView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A0000000000000000000A39 /* TerminalView.swift */; };
+		1A0000000000000000000A60 /* TerminalScreenView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A0000000000000000000A3A /* TerminalScreenView.swift */; };
+		1A0000000000000000000A61 /* AttentionCenter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A0000000000000000000A3B /* AttentionCenter.swift */; };
+		1B0000000000000000000B40 /* DreamUITestCase.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1B0000000000000000000B20 /* DreamUITestCase.swift */; };
+		1B0000000000000000000B41 /* PairingUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1B0000000000000000000B21 /* PairingUITests.swift */; };
+		1B0000000000000000000B42 /* ProfilesUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1B0000000000000000000B22 /* ProfilesUITests.swift */; };
+		1B0000000000000000000B43 /* SessionLifecycleUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1B0000000000000000000B23 /* SessionLifecycleUITests.swift */; };
+		1B0000000000000000000B44 /* TerminalUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1B0000000000000000000B24 /* TerminalUITests.swift */; };
+		1B0000000000000000000B45 /* AttentionUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1B0000000000000000000B25 /* AttentionUITests.swift */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		1A0000000000000000000A04 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 1A0000000000000000000A00 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 1A0000000000000000000A01;
+			remoteInfo = Dream;
+		};
+		1B0000000000000000000B04 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 1A0000000000000000000A00 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 1A0000000000000000000A01;
+			remoteInfo = Dream;
+		};
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXFileReference section */
+		1A0000000000000000000A20 /* DreamApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DreamApp.swift; sourceTree = "<group>"; };
+		1A0000000000000000000A21 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
+		1A0000000000000000000A22 /* PairingURLParser.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PairingURLParser.swift; sourceTree = "<group>"; };
+		1A0000000000000000000A23 /* DaemonProfile.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DaemonProfile.swift; sourceTree = "<group>"; };
+		1A0000000000000000000A24 /* ProfileStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProfileStore.swift; sourceTree = "<group>"; };
+		1A0000000000000000000A25 /* DreamSession.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DreamSession.swift; sourceTree = "<group>"; };
+		1A0000000000000000000A26 /* APIClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = APIClient.swift; sourceTree = "<group>"; };
+		1A0000000000000000000A27 /* KeychainTokenStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeychainTokenStore.swift; sourceTree = "<group>"; };
+		1A0000000000000000000A28 /* AppState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppState.swift; sourceTree = "<group>"; };
+		1A0000000000000000000A29 /* PairingView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PairingView.swift; sourceTree = "<group>"; };
+		1A0000000000000000000A2A /* ProfileListView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProfileListView.swift; sourceTree = "<group>"; };
+		1A0000000000000000000A2B /* SessionListView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionListView.swift; sourceTree = "<group>"; };
+		1A0000000000000000000A2C /* SessionFormView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionFormView.swift; sourceTree = "<group>"; };
+		1A0000000000000000000A36 /* Frame.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Frame.swift; sourceTree = "<group>"; };
+		1A0000000000000000000A37 /* WSClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WSClient.swift; sourceTree = "<group>"; };
+		1A0000000000000000000A38 /* TerminalController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TerminalController.swift; sourceTree = "<group>"; };
+		1A0000000000000000000A39 /* TerminalView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TerminalView.swift; sourceTree = "<group>"; };
+		1A0000000000000000000A3A /* TerminalScreenView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TerminalScreenView.swift; sourceTree = "<group>"; };
+		1A0000000000000000000A3B /* AttentionCenter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AttentionCenter.swift; sourceTree = "<group>"; };
+		1A0000000000000000000A30 /* APIClientTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = APIClientTests.swift; sourceTree = "<group>"; };
+		1A0000000000000000000A31 /* DreamSessionDecodingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DreamSessionDecodingTests.swift; sourceTree = "<group>"; };
+		1A0000000000000000000A32 /* PairingURLParserTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PairingURLParserTests.swift; sourceTree = "<group>"; };
+		1A0000000000000000000A33 /* ProfileStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProfileStoreTests.swift; sourceTree = "<group>"; };
+		1A0000000000000000000A34 /* StubURLProtocol.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StubURLProtocol.swift; sourceTree = "<group>"; };
+		1A0000000000000000000A35 /* FrameCodecTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FrameCodecTests.swift; sourceTree = "<group>"; };
+		1A0000000000000000000A62 /* ReconnectPolicyTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReconnectPolicyTests.swift; sourceTree = "<group>"; };
+		1A0000000000000000000A63 /* AppStateUnauthorizedTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppStateUnauthorizedTests.swift; sourceTree = "<group>"; };
+		1A0000000000000000000A64 /* WSClientUpgradeClassificationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WSClientUpgradeClassificationTests.swift; sourceTree = "<group>"; };
+		1A0000000000000000000A6B /* WSClientAttachURLTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WSClientAttachURLTests.swift; sourceTree = "<group>"; };
+		1A0000000000000000000A6C /* AttentionCenterEdgeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AttentionCenterEdgeTests.swift; sourceTree = "<group>"; };
+		1A0000000000000000000A6D /* SnapshotPayloadHelpersTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SnapshotPayloadHelpersTests.swift; sourceTree = "<group>"; };
+		1A0000000000000000000A6F /* AttachSequencerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AttachSequencerTests.swift; sourceTree = "<group>"; };
+		1A0000000000000000000A71 /* SnapshotFeedSequenceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SnapshotFeedSequenceTests.swift; sourceTree = "<group>"; };
+		1A0000000000000000000A72 /* WatchdogSeamTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WatchdogSeamTests.swift; sourceTree = "<group>"; };
+		1A0000000000000000000A05 /* Dream.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Dream.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		1A0000000000000000000A06 /* DreamTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = DreamTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		1B0000000000000000000B20 /* DreamUITestCase.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DreamUITestCase.swift; sourceTree = "<group>"; };
+		1B0000000000000000000B21 /* PairingUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PairingUITests.swift; sourceTree = "<group>"; };
+		1B0000000000000000000B22 /* ProfilesUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProfilesUITests.swift; sourceTree = "<group>"; };
+		1B0000000000000000000B23 /* SessionLifecycleUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionLifecycleUITests.swift; sourceTree = "<group>"; };
+		1B0000000000000000000B24 /* TerminalUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TerminalUITests.swift; sourceTree = "<group>"; };
+		1B0000000000000000000B25 /* AttentionUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AttentionUITests.swift; sourceTree = "<group>"; };
+		1B0000000000000000000B06 /* DreamUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = DreamUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		1A0000000000000000000A0B /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				1A0000000000000000000A48 /* SwiftTerm in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		1A0000000000000000000A0C /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		1B0000000000000000000B0C /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		1A0000000000000000000A07 = {
+			isa = PBXGroup;
+			children = (
+				1A0000000000000000000A08 /* Dream */,
+				1A0000000000000000000A09 /* DreamTests */,
+				1B0000000000000000000B09 /* DreamUITests */,
+				1A0000000000000000000A0A /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		1A0000000000000000000A08 /* Dream */ = {
+			isa = PBXGroup;
+			children = (
+				1A0000000000000000000A20 /* DreamApp.swift */,
+				1A0000000000000000000A21 /* ContentView.swift */,
+				1A0000000000000000000A22 /* PairingURLParser.swift */,
+				1A0000000000000000000A23 /* DaemonProfile.swift */,
+				1A0000000000000000000A24 /* ProfileStore.swift */,
+				1A0000000000000000000A27 /* KeychainTokenStore.swift */,
+				1A0000000000000000000A25 /* DreamSession.swift */,
+				1A0000000000000000000A26 /* APIClient.swift */,
+				1A0000000000000000000A28 /* AppState.swift */,
+				1A0000000000000000000A29 /* PairingView.swift */,
+				1A0000000000000000000A2A /* ProfileListView.swift */,
+				1A0000000000000000000A2B /* SessionListView.swift */,
+				1A0000000000000000000A2C /* SessionFormView.swift */,
+				1A0000000000000000000A36 /* Frame.swift */,
+				1A0000000000000000000A37 /* WSClient.swift */,
+				1A0000000000000000000A38 /* TerminalController.swift */,
+				1A0000000000000000000A39 /* TerminalView.swift */,
+				1A0000000000000000000A3A /* TerminalScreenView.swift */,
+				1A0000000000000000000A3B /* AttentionCenter.swift */,
+			);
+			path = Dream;
+			sourceTree = "<group>";
+		};
+		1A0000000000000000000A09 /* DreamTests */ = {
+			isa = PBXGroup;
+			children = (
+				1A0000000000000000000A30 /* APIClientTests.swift */,
+				1A0000000000000000000A31 /* DreamSessionDecodingTests.swift */,
+				1A0000000000000000000A32 /* PairingURLParserTests.swift */,
+				1A0000000000000000000A33 /* ProfileStoreTests.swift */,
+				1A0000000000000000000A34 /* StubURLProtocol.swift */,
+				1A0000000000000000000A35 /* FrameCodecTests.swift */,
+				1A0000000000000000000A62 /* ReconnectPolicyTests.swift */,
+				1A0000000000000000000A63 /* AppStateUnauthorizedTests.swift */,
+				1A0000000000000000000A64 /* WSClientUpgradeClassificationTests.swift */,
+				1A0000000000000000000A6B /* WSClientAttachURLTests.swift */,
+				1A0000000000000000000A6C /* AttentionCenterEdgeTests.swift */,
+				1A0000000000000000000A6D /* SnapshotPayloadHelpersTests.swift */,
+				1A0000000000000000000A6F /* AttachSequencerTests.swift */,
+				1A0000000000000000000A71 /* SnapshotFeedSequenceTests.swift */,
+				1A0000000000000000000A72 /* WatchdogSeamTests.swift */,
+			);
+			path = DreamTests;
+			sourceTree = "<group>";
+		};
+		1B0000000000000000000B09 /* DreamUITests */ = {
+			isa = PBXGroup;
+			children = (
+				1B0000000000000000000B20 /* DreamUITestCase.swift */,
+				1B0000000000000000000B21 /* PairingUITests.swift */,
+				1B0000000000000000000B22 /* ProfilesUITests.swift */,
+				1B0000000000000000000B23 /* SessionLifecycleUITests.swift */,
+				1B0000000000000000000B24 /* TerminalUITests.swift */,
+				1B0000000000000000000B25 /* AttentionUITests.swift */,
+			);
+			path = DreamUITests;
+			sourceTree = "<group>";
+		};
+		1A0000000000000000000A0A /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				1A0000000000000000000A05 /* Dream.app */,
+				1A0000000000000000000A06 /* DreamTests.xctest */,
+				1B0000000000000000000B06 /* DreamUITests.xctest */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		1A0000000000000000000A01 /* Dream */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 1A0000000000000000000A12 /* Build configuration list for PBXNativeTarget "Dream" */;
+			buildPhases = (
+				1A0000000000000000000A0F /* Sources */,
+				1A0000000000000000000A0B /* Frameworks */,
+				1A0000000000000000000A0D /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = Dream;
+			packageProductDependencies = (
+				1A0000000000000000000A15 /* SwiftTerm */,
+			);
+			productName = Dream;
+			productReference = 1A0000000000000000000A05 /* Dream.app */;
+			productType = "com.apple.product-type.application";
+		};
+		1A0000000000000000000A02 /* DreamTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 1A0000000000000000000A13 /* Build configuration list for PBXNativeTarget "DreamTests" */;
+			buildPhases = (
+				1A0000000000000000000A10 /* Sources */,
+				1A0000000000000000000A0C /* Frameworks */,
+				1A0000000000000000000A0E /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				1A0000000000000000000A03 /* PBXTargetDependency */,
+			);
+			name = DreamTests;
+			productName = DreamTests;
+			productReference = 1A0000000000000000000A06 /* DreamTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
+		1B0000000000000000000B02 /* DreamUITests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 1B0000000000000000000B13 /* Build configuration list for PBXNativeTarget "DreamUITests" */;
+			buildPhases = (
+				1B0000000000000000000B10 /* Sources */,
+				1B0000000000000000000B0C /* Frameworks */,
+				1B0000000000000000000B0E /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				1B0000000000000000000B03 /* PBXTargetDependency */,
+			);
+			name = DreamUITests;
+			productName = DreamUITests;
+			productReference = 1B0000000000000000000B06 /* DreamUITests.xctest */;
+			productType = "com.apple.product-type.bundle.ui-testing";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		1A0000000000000000000A00 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = 1;
+				LastSwiftUpdateCheck = 1600;
+				LastUpgradeCheck = 1600;
+				TargetAttributes = {
+					1A0000000000000000000A01 = {
+						CreatedOnToolsVersion = 16.0;
+					};
+					1A0000000000000000000A02 = {
+						CreatedOnToolsVersion = 16.0;
+						TestTargetID = 1A0000000000000000000A01;
+					};
+					1B0000000000000000000B02 = {
+						CreatedOnToolsVersion = 16.0;
+						TestTargetID = 1A0000000000000000000A01;
+					};
+				};
+			};
+			buildConfigurationList = 1A0000000000000000000A11 /* Build configuration list for PBXProject "Dream" */;
+			compatibilityVersion = "Xcode 14.0";
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				en,
+				Base,
+			);
+			mainGroup = 1A0000000000000000000A07;
+			packageReferences = (
+				1A0000000000000000000A14 /* XCRemoteSwiftPackageReference "SwiftTerm" */,
+			);
+			productRefGroup = 1A0000000000000000000A0A /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				1A0000000000000000000A01 /* Dream */,
+				1A0000000000000000000A02 /* DreamTests */,
+				1B0000000000000000000B02 /* DreamUITests */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		1A0000000000000000000A0D /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		1A0000000000000000000A0E /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		1B0000000000000000000B0E /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		1A0000000000000000000A0F /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				1A0000000000000000000A40 /* DreamApp.swift in Sources */,
+				1A0000000000000000000A41 /* ContentView.swift in Sources */,
+				1A0000000000000000000A42 /* PairingURLParser.swift in Sources */,
+				1A0000000000000000000A43 /* DaemonProfile.swift in Sources */,
+				1A0000000000000000000A44 /* ProfileStore.swift in Sources */,
+				1A0000000000000000000A47 /* KeychainTokenStore.swift in Sources */,
+				1A0000000000000000000A45 /* DreamSession.swift in Sources */,
+				1A0000000000000000000A46 /* APIClient.swift in Sources */,
+				1A0000000000000000000A55 /* AppState.swift in Sources */,
+				1A0000000000000000000A56 /* PairingView.swift in Sources */,
+				1A0000000000000000000A57 /* ProfileListView.swift in Sources */,
+				1A0000000000000000000A58 /* SessionListView.swift in Sources */,
+				1A0000000000000000000A59 /* SessionFormView.swift in Sources */,
+				1A0000000000000000000A5C /* Frame.swift in Sources */,
+				1A0000000000000000000A5D /* WSClient.swift in Sources */,
+				1A0000000000000000000A5E /* TerminalController.swift in Sources */,
+				1A0000000000000000000A5F /* TerminalView.swift in Sources */,
+				1A0000000000000000000A60 /* TerminalScreenView.swift in Sources */,
+				1A0000000000000000000A61 /* AttentionCenter.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		1A0000000000000000000A10 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				1A0000000000000000000A50 /* APIClientTests.swift in Sources */,
+				1A0000000000000000000A51 /* DreamSessionDecodingTests.swift in Sources */,
+				1A0000000000000000000A52 /* PairingURLParserTests.swift in Sources */,
+				1A0000000000000000000A53 /* ProfileStoreTests.swift in Sources */,
+				1A0000000000000000000A54 /* StubURLProtocol.swift in Sources */,
+				1A0000000000000000000A5B /* FrameCodecTests.swift in Sources */,
+				1A0000000000000000000A65 /* ReconnectPolicyTests.swift in Sources */,
+				1A0000000000000000000A66 /* AppStateUnauthorizedTests.swift in Sources */,
+				1A0000000000000000000A67 /* WSClientUpgradeClassificationTests.swift in Sources */,
+				1A0000000000000000000A68 /* WSClientAttachURLTests.swift in Sources */,
+				1A0000000000000000000A69 /* AttentionCenterEdgeTests.swift in Sources */,
+				1A0000000000000000000A6A /* SnapshotPayloadHelpersTests.swift in Sources */,
+				1A0000000000000000000A6E /* AttachSequencerTests.swift in Sources */,
+				1A0000000000000000000A70 /* SnapshotFeedSequenceTests.swift in Sources */,
+				1A0000000000000000000A73 /* WatchdogSeamTests.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		1B0000000000000000000B10 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				1B0000000000000000000B40 /* DreamUITestCase.swift in Sources */,
+				1B0000000000000000000B41 /* PairingUITests.swift in Sources */,
+				1B0000000000000000000B42 /* ProfilesUITests.swift in Sources */,
+				1B0000000000000000000B43 /* SessionLifecycleUITests.swift in Sources */,
+				1B0000000000000000000B44 /* TerminalUITests.swift in Sources */,
+				1B0000000000000000000B45 /* AttentionUITests.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		1A0000000000000000000A03 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 1A0000000000000000000A01 /* Dream */;
+			targetProxy = 1A0000000000000000000A04 /* PBXContainerItemProxy */;
+		};
+		1B0000000000000000000B03 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 1A0000000000000000000A01 /* Dream */;
+			targetProxy = 1B0000000000000000000B04 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
+
+/* Begin XCBuildConfiguration section */
+		1A0000000000000000000001 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"DEBUG=1",
+					"$(inherited)",
+				);
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				MTL_FAST_MATH = YES;
+				ONLY_ACTIVE_ARCH = YES;
+				SDKROOT = iphoneos;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG $(inherited)";
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+			};
+			name = Debug;
+		};
+		1A0000000000000000000002 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				MTL_FAST_MATH = YES;
+				SDKROOT = iphoneos;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				VALIDATE_PRODUCT = YES;
+			};
+			name = Release;
+		};
+		1A0000000000000000000003 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = "";
+				ENABLE_PREVIEWS = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "Dream connects to a terminal daemon on your local network.";
+				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
+				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.talabs.dream;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 1;
+			};
+			name = Debug;
+		};
+		1A0000000000000000000004 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = "";
+				ENABLE_PREVIEWS = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "Dream connects to a terminal daemon on your local network.";
+				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
+				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.talabs.dream;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 1;
+			};
+			name = Release;
+		};
+		1A0000000000000000000005 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = "";
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.talabs.dream.tests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 1;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Dream.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/Dream";
+			};
+			name = Debug;
+		};
+		1A0000000000000000000006 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = "";
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.talabs.dream.tests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 1;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Dream.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/Dream";
+			};
+			name = Release;
+		};
+		1B0000000000000000000005 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = "";
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.talabs.dream.uitests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 1;
+				TEST_TARGET_NAME = Dream;
+			};
+			name = Debug;
+		};
+		1B0000000000000000000006 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = "";
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.talabs.dream.uitests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 1;
+				TEST_TARGET_NAME = Dream;
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		1A0000000000000000000A11 /* Build configuration list for PBXProject "Dream" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				1A0000000000000000000001 /* Debug */,
+				1A0000000000000000000002 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		1A0000000000000000000A12 /* Build configuration list for PBXNativeTarget "Dream" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				1A0000000000000000000003 /* Debug */,
+				1A0000000000000000000004 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		1A0000000000000000000A13 /* Build configuration list for PBXNativeTarget "DreamTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				1A0000000000000000000005 /* Debug */,
+				1A0000000000000000000006 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		1B0000000000000000000B13 /* Build configuration list for PBXNativeTarget "DreamUITests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				1B0000000000000000000005 /* Debug */,
+				1B0000000000000000000006 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+/* End XCConfigurationList section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+		1A0000000000000000000A14 /* XCRemoteSwiftPackageReference "SwiftTerm" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/migueldeicaza/SwiftTerm";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 1.99.2;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		1A0000000000000000000A15 /* SwiftTerm */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 1A0000000000000000000A14 /* XCRemoteSwiftPackageReference "SwiftTerm" */;
+			productName = SwiftTerm;
+		};
+/* End XCSwiftPackageProductDependency section */
+	};
+	rootObject = 1A0000000000000000000A00 /* Project object */;
+}

@@ -150,7 +150,9 @@ from the built-in dashboard.
 - **Resurrect**: sessions alive when the daemon stopped come back on the
   next start (status `resurrected`).
 - **Attention**: a session flags attention on a bell in its output or after
-  30 s of output silence while detached; attaching clears it.
+  30 s of output silence while detached; attaching clears it. `GET
+  /api/sessions` and `GET /api/sessions/<id>` report it as `attention` —
+  runtime state only, never written to `session.json`.
 - **Setup script**: `setup_script` on create is queued as the PTY's first
   input line — use it for env setup, `cd`, or launching an agent CLI.
 - **Log retention**: `--log-cap` / `--log-max-age` bound replay logs; the
@@ -191,6 +193,110 @@ only. `tailscale` must be installed (`brew install tailscale` on macOS, or
 see https://tailscale.com/download) and logged in, and the tailnet's HTTPS
 certificates feature must be enabled (admin console → DNS → HTTPS
 Certificates).
+
+## Mobile app
+
+A native iOS companion (`ios/`) that pairs with a running daemon and
+offers the session browser plus a full terminal attach on iPhone.
+Requires iOS 17+.
+
+- **Pairing**: run `dream url` on the daemon host and paste the printed
+  `…/?token=…` URL into the app's pairing form. The token is stored in
+  the iOS Keychain; several daemons can be saved as named profiles.
+  The printed URL reflects the bind — for `0.0.0.0`/`::` binds it
+  resolves the machine's LAN IPv4; use that IP if a hostname fails.
+- **Reachability**: the phone must be able to reach the daemon — a
+  non-loopback bind on the same LAN (`--bind`/`--public`, see the flag
+  table), or anywhere over your tailnet (see above). Note: iOS (ATS)
+  blocks plain `http` to named hosts — pair by IP literal or serve the
+  daemon over `https` (e.g. `tailscale serve`).
+- **Build**: open `ios/Dream.xcodeproj` in Xcode, or from the repo root:
+
+  ```sh
+  xcodebuild -project ios/Dream.xcodeproj -scheme Dream \
+      -destination 'platform=iOS Simulator,name=iPhone 15' build
+  ```
+
+- **Attention**: a session flagging attention shows an orange dot on its
+  row and posts a local notification; tapping it opens that session's
+  terminal. Denying notification permission only mutes the banners —
+  the in-app dot keeps working.
+- **Limitations**: notifications are local and fire only while the app
+  is alive — foreground or the short iOS background grace window — so
+  they are driven by the app's ~15 s session poll, not a push channel.
+  A killed app cannot notify.
+
+### Running the iOS UI tests
+
+The `DreamUITests` suite drives the app against real daemons on
+loopback (see `ios/DreamUITests/DreamUITestCase.swift` for the fixture
+contract):
+
+- `127.0.0.1:4161` — "primary" daemon, token `e2e-ui-token-alpha`
+- `127.0.0.1:4162` — "secondary" daemon, token `e2e-ui-token-beta`
+- `127.0.0.1:4171` — a transparent TCP proxy in front of the primary.
+  While `/tmp/dream-e2e/deny.flag` exists it answers `401` to new
+  connections instead of forwarding — that is how a stored token going
+  stale is exercised without restarting anything.
+
+Launch the fixture daemons from the repo root:
+
+```sh
+mkdir -p /tmp/dream-e2e
+target/debug/dream --port 4161 --auth-token e2e-ui-token-alpha \
+    --data-dir /tmp/dream-e2e/alpha &
+target/debug/dream --port 4162 --auth-token e2e-ui-token-beta \
+    --data-dir /tmp/dream-e2e/beta &
+```
+
+For the gate, any TCP forwarder that honors the flag works; this
+one-file Python proxy is enough (save as `/tmp/dream-e2e/gate.py`,
+run `python3 /tmp/dream-e2e/gate.py &`):
+
+```python
+import os, socket, threading
+
+FLAG = "/tmp/dream-e2e/deny.flag"
+DENIED = b"HTTP/1.1 401 Unauthorized\r\nContent-Length: 0\r\n\r\n"
+
+def pump(src, dst):
+    try:
+        while chunk := src.recv(65536):
+            dst.sendall(chunk)
+    except OSError:
+        pass
+    for s in (src, dst):
+        try: s.close()
+        except OSError: pass
+
+def handle(client):
+    if os.path.exists(FLAG):
+        client.recv(65536)
+        client.sendall(DENIED)
+        client.close()
+        return
+    upstream = socket.create_connection(("127.0.0.1", 4161))
+    threading.Thread(target=pump, args=(client, upstream), daemon=True).start()
+    pump(upstream, client)
+
+listener = socket.socket()
+listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+listener.bind(("127.0.0.1", 4171))
+listener.listen()
+while True:
+    client, _ = listener.accept()
+    threading.Thread(target=handle, args=(client,), daemon=True).start()
+```
+
+Then run the suite:
+
+```sh
+xcodebuild -project ios/Dream.xcodeproj -scheme DreamUITests \
+    -destination 'platform=iOS Simulator,name=iPhone 15' test
+```
+
+Unit tests (`DreamTests`) need no daemons:
+`xcodebuild -project ios/Dream.xcodeproj -scheme Dream -destination 'platform=iOS Simulator,name=iPhone 15' test`.
 
 ## Auto-start on macOS (launchd)
 

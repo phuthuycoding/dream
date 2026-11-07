@@ -1,0 +1,362 @@
+import Security
+import XCTest
+@testable import Dream
+
+/// Profile storage: profile metadata persists across store instances and
+/// the bearer token lives only in the Keychain — never in UserDefaults,
+/// files, or the encoded profile itself.
+final class ProfileStoreTests: XCTestCase {
+    private var store: ProfileStore!
+    /// Throwaway profiles.json — the store's default URL is the host
+    /// app's real Application Support file, shared with the dev's
+    /// paired profiles.
+    private var fileURL: URL!
+    /// Profiles created by the running test, deleted on teardown.
+    private var createdProfileIDs: [UUID] = []
+    /// Tokens issued by the running test so teardown can scrub leftover
+    /// Keychain items even when deletion itself is under test.
+    private var issuedTokens: Set<String> = []
+
+    override func setUp() {
+        super.setUp()
+        fileURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("dream-profilestore-tests-\(UUID().uuidString).json")
+        store = ProfileStore(fileURL: fileURL)
+    }
+
+    override func tearDownWithError() throws {
+        for id in createdProfileIDs {
+            try store.delete(id)
+        }
+        createdProfileIDs.removeAll()
+        // `delete` is not required to clear the pointer under every
+        // implementation — reset it so a stale id never leaks into the
+        // next test's fresh store.
+        store.activeProfileId = nil
+        purgeIssuedTokensFromKeychain()
+        store = nil
+        if let fileURL, FileManager.default.fileExists(atPath: fileURL.path) {
+            try FileManager.default.removeItem(at: fileURL)
+        }
+        fileURL = nil
+        try super.tearDownWithError()
+    }
+
+    // MARK: - Save + persistence
+
+    func testSavingProfileListsItAndStoresTokenInKeychain() throws {
+        let profile = makeProfile(name: "mac-studio")
+        let token = issueToken()
+
+        try saveAndTrack(profile, token: token)
+
+        guard let listed = store.profiles.first(where: { $0.id == profile.id }) else {
+            return XCTFail("saved profile must appear in the profile list")
+        }
+        XCTAssertEqual(listed.name, profile.name)
+        XCTAssertEqual(listed.baseURL, profile.baseURL)
+        XCTAssertEqual(store.token(for: profile.id), token)
+        XCTAssertTrue(
+            keychainContains(token),
+            "the token must be stored as a Keychain generic password"
+        )
+    }
+
+    func testSavedProfileSurvivesANewStoreInstance() throws {
+        let profile = makeProfile(name: "home-server")
+        let token = issueToken()
+        try saveAndTrack(profile, token: token)
+
+        let reloaded = ProfileStore(fileURL: fileURL)
+        XCTAssertTrue(
+            reloaded.profiles.contains(where: { $0.id == profile.id }),
+            "a fresh store instance must list the persisted profile"
+        )
+        XCTAssertEqual(
+            reloaded.token(for: profile.id), token,
+            "the Keychain token must outlive the store instance"
+        )
+    }
+
+    func testTokenIsNeverPersistedOutsideKeychain() throws {
+        let profile = makeProfile(name: "vps")
+        let token = issueToken()
+        try saveAndTrack(profile, token: token)
+
+        XCTAssertFalse(
+            userDefaultsContains(token),
+            "the token must not be written to UserDefaults"
+        )
+        XCTAssertTrue(
+            sandboxFilesContaining(token).isEmpty,
+            "the token must not be written to files under the app sandbox: "
+                + sandboxFilesContaining(token).map(\.lastPathComponent).joined(separator: ", ")
+        )
+        let encoded = try JSONEncoder().encode(profile)
+        XCTAssertFalse(
+            String(decoding: encoded, as: UTF8.self).contains(token),
+            "the token must not be a field on the persisted profile model"
+        )
+    }
+
+    // MARK: - Active profile
+
+    func testSwitchingActiveProfileMovesPointerAndKeepsBothProfiles() throws {
+        let first = makeProfile(name: "first")
+        let second = makeProfile(name: "second")
+        try saveAndTrack(first, token: issueToken())
+        try saveAndTrack(second, token: issueToken())
+
+        store.activeProfileId = first.id
+        XCTAssertEqual(store.activeProfileId, first.id)
+
+        store.activeProfileId = second.id
+        XCTAssertEqual(store.activeProfileId, second.id)
+
+        let ids = store.profiles.map(\.id)
+        XCTAssertTrue(ids.contains(first.id), "the previously active profile must remain listed")
+        XCTAssertTrue(ids.contains(second.id), "the active profile must remain listed")
+        XCTAssertEqual(
+            ProfileStore(fileURL: fileURL).activeProfileId, second.id,
+            "the active pointer must persist across store instances"
+        )
+    }
+
+    // MARK: - Edit + delete
+
+    func testUpdatingProfileReplacesItsKeychainToken() throws {
+        let profile = makeProfile(name: "old-name")
+        try saveAndTrack(profile, token: issueToken())
+
+        let newToken = issueToken()
+        var edited = profile
+        edited.name = "new-name"
+        try saveAndTrack(edited, token: newToken)
+
+        XCTAssertEqual(store.token(for: profile.id), newToken)
+        XCTAssertTrue(keychainContains(newToken))
+        XCTAssertEqual(
+            store.profiles.first(where: { $0.id == profile.id })?.name,
+            "new-name",
+            "re-saving a profile id must update its stored metadata"
+        )
+    }
+
+    func testDeletingProfileRemovesKeychainTokenAndUnlistsIt() throws {
+        let doomed = makeProfile(name: "doomed")
+        let token = issueToken()
+        try saveAndTrack(doomed, token: token)
+        let survivor = makeProfile(name: "survivor")
+        try saveAndTrack(survivor, token: issueToken())
+        store.activeProfileId = doomed.id
+
+        try store.delete(doomed.id)
+        createdProfileIDs.removeAll { $0 == doomed.id }
+
+        XCTAssertFalse(store.profiles.contains(where: { $0.id == doomed.id }))
+        XCTAssertTrue(store.profiles.contains(where: { $0.id == survivor.id }))
+        XCTAssertNil(store.token(for: doomed.id))
+        XCTAssertFalse(
+            keychainContains(token),
+            "deleting a profile must delete its Keychain item"
+        )
+        XCTAssertNotEqual(
+            store.activeProfileId, doomed.id,
+            "the active pointer must never reference a deleted profile"
+        )
+    }
+
+    // MARK: - Duplicate-name rule
+
+    func testSameNameOnADifferentProfileIdIsADuplicate() {
+        let existing = makeProfile(name: "mac-studio")
+        let incoming = makeProfile(name: "mac-studio")
+
+        XCTAssertTrue(
+            ProfileStore.hasDuplicateName(incoming, among: [existing]),
+            "a second profile carrying an existing name must be flagged"
+        )
+    }
+
+    func testSameNameOnTheSameProfileIdIsNotADuplicate() {
+        let profile = makeProfile(name: "mac-studio")
+
+        XCTAssertFalse(
+            ProfileStore.hasDuplicateName(profile, among: [profile]),
+            "re-saving a profile under its own name must not self-collide"
+        )
+    }
+
+    func testDistinctNamesAreNotDuplicates() {
+        let existing = makeProfile(name: "mac-studio")
+        let incoming = makeProfile(name: "vps")
+
+        XCTAssertFalse(ProfileStore.hasDuplicateName(incoming, among: [existing]))
+    }
+
+    func testNamesDifferingOnlyInCaseAreNotDuplicates() {
+        let existing = makeProfile(name: "mac-studio")
+        let incoming = makeProfile(name: "Mac-Studio")
+
+        XCTAssertFalse(
+            ProfileStore.hasDuplicateName(incoming, among: [existing]),
+            "the name match is exact — case differs, the names are distinct"
+        )
+    }
+
+    func testSavingProfileUnderAnotherProfilesNameThrowsAndWritesNothing() throws {
+        let existing = makeProfile(name: "mac-studio")
+        try saveAndTrack(existing, token: issueToken())
+        let squatter = makeProfile(name: "mac-studio")
+        createdProfileIDs.append(squatter.id) // defensive — the save must not land
+
+        XCTAssertThrowsError(try store.save(squatter, token: issueToken())) { error in
+            XCTAssertEqual(
+                error as? ProfileError, .duplicateName("mac-studio"),
+                "the collision must surface as a duplicate-name error naming the clash"
+            )
+        }
+        XCTAssertFalse(
+            store.profiles.contains(where: { $0.id == squatter.id }),
+            "a rejected save must not list the squatter profile"
+        )
+    }
+
+    func testRenamingToAnotherProfilesNameThrowsAndKeepsTheOldName() throws {
+        let existing = makeProfile(name: "mac-studio")
+        try saveAndTrack(existing, token: issueToken())
+        let second = makeProfile(name: "vps")
+        try saveAndTrack(second, token: issueToken())
+
+        var renamed = second
+        renamed.name = "mac-studio"
+        XCTAssertThrowsError(try store.update(renamed)) { error in
+            XCTAssertEqual(error as? ProfileError, .duplicateName("mac-studio"))
+        }
+        XCTAssertEqual(
+            store.profiles.first(where: { $0.id == second.id })?.name, "vps",
+            "a rejected rename must leave the stored name untouched"
+        )
+    }
+
+    // MARK: - Helpers
+
+    private func makeProfile(name: String) -> DaemonProfile {
+        DaemonProfile(
+            id: UUID(),
+            name: name,
+            baseURL: URL(string: "http://192.168.1.5:4020")!
+        )
+    }
+
+    /// Saves a profile and records it for teardown deletion. Tracked by
+    /// id so re-saving an edited profile doesn't schedule a second delete
+    /// of an already-removed profile.
+    private func saveAndTrack(_ profile: DaemonProfile, token: String) throws {
+        try store.save(profile, token: token)
+        if !createdProfileIDs.contains(profile.id) {
+            createdProfileIDs.append(profile.id)
+        }
+    }
+
+    private func issueToken() -> String {
+        let token = "tok-" + UUID().uuidString
+        issuedTokens.insert(token)
+        return token
+    }
+
+    /// Every generic-password item in the test keychain. The store's
+    /// service/account naming is its own — the contract is the class and
+    /// the value, not the keys it files under.
+    private func keychainItems() -> [[String: Any]] {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecReturnData as String: true,
+            kSecReturnAttributes as String: true,
+            kSecMatchLimit as String: kSecMatchLimitAll,
+        ]
+        var result: CFTypeRef?
+        let status = SecItemCopyMatching(query as CFDictionary, &result)
+        guard status == errSecSuccess else {
+            return []
+        }
+        return result as? [[String: Any]] ?? []
+    }
+
+    private func keychainContains(_ token: String) -> Bool {
+        keychainItems().contains { item in
+            (item[kSecValueData as String] as? Data)
+                .flatMap { String(data: $0, encoding: .utf8) } == token
+        }
+    }
+
+    private func purgeIssuedTokensFromKeychain() {
+        for item in keychainItems() {
+            guard let data = item[kSecValueData as String] as? Data,
+                  let value = String(data: data, encoding: .utf8),
+                  issuedTokens.contains(value)
+            else {
+                continue
+            }
+            var delete: [String: Any] = [kSecClass as String: kSecClassGenericPassword]
+            if let service = item[kSecAttrService as String] as? String {
+                delete[kSecAttrService as String] = service
+            }
+            if let account = item[kSecAttrAccount as String] as? String {
+                delete[kSecAttrAccount as String] = account
+            }
+            let status = SecItemDelete(delete as CFDictionary)
+            if status != errSecSuccess && status != errSecItemNotFound {
+                XCTFail("Keychain cleanup failed for a test token: OSStatus \(status)")
+            }
+        }
+        issuedTokens.removeAll()
+    }
+
+    private func userDefaultsContains(_ secret: String) -> Bool {
+        UserDefaults.standard.dictionaryRepresentation().values.contains { value in
+            switch value {
+            case let string as String:
+                return string.contains(secret)
+            case let data as Data:
+                return String(data: data, encoding: .utf8)?.contains(secret) ?? false
+            default:
+                return false
+            }
+        }
+    }
+
+    /// Files that could plausibly hold profile metadata — Documents,
+    /// Application Support, Caches. Files that cannot be read as UTF-8
+    /// text are not a readable persistence format for a secret string.
+    private func sandboxFilesContaining(_ secret: String) -> [URL] {
+        let fm = FileManager.default
+        let roots = [
+            fm.urls(for: .documentDirectory, in: .userDomainMask),
+            fm.urls(for: .applicationSupportDirectory, in: .userDomainMask),
+            fm.urls(for: .cachesDirectory, in: .userDomainMask),
+        ].flatMap { $0 }
+        var hits: [URL] = []
+        for root in roots {
+            guard let enumerator = fm.enumerator(
+                at: root,
+                includingPropertiesForKeys: [.isRegularFileKey, .fileSizeKey]
+            ) else {
+                continue
+            }
+            for case let url as URL in enumerator {
+                guard
+                    let values = try? url.resourceValues(forKeys: [.isRegularFileKey, .fileSizeKey]),
+                    values.isRegularFile == true,
+                    (values.fileSize ?? 0) < 4_000_000,
+                    let text = try? String(contentsOf: url, encoding: .utf8),
+                    text.contains(secret)
+                else {
+                    continue
+                }
+                hits.append(url)
+            }
+        }
+        return hits
+    }
+}

@@ -1,4 +1,4 @@
-//! Integration tests for the HTTP API + token auth (TC-011, TC-014).
+//! Integration tests for the HTTP API + token auth (TC-005, TC-006, TC-011, TC-014).
 //!
 //! A real axum server is spawned per test on a loopback ephemeral port and
 //! driven with reqwest / tokio-tungstenite — `tower` is not a direct
@@ -24,6 +24,7 @@
 use std::fs;
 use std::path::Path;
 use std::sync::Arc;
+use std::time::Duration;
 
 use reqwest::StatusCode;
 use serde_json::{json, Value};
@@ -31,6 +32,7 @@ use tempfile::TempDir;
 
 use crate::auth::oauth::GithubOauth;
 use crate::model::{Session, Status};
+use crate::runtime::{RuntimeManager, DEFAULT_IDLE_ATTENTION};
 use crate::state::registry::Registry;
 
 const TOKEN: &str = "test-token-9f8e7d6c5b4a3210";
@@ -268,6 +270,28 @@ async fn websocket_upgrade_with_a_valid_query_token_passes_auth() {
     }
 }
 
+#[tokio::test]
+async fn websocket_upgrade_with_a_valid_bearer_token_switches_protocols() {
+    let data = TempDir::new().expect("tempdir");
+    let session = seed_session(data.path(), "ws-bearer");
+    let base = spawn_server(data.path()).await;
+    let client = reqwest::Client::new();
+
+    // `is_authorized` checks the Authorization header before `?token=` —
+    // header-capable clients (the iOS app) attach this way, so the
+    // bearer must unlock the same 101 the query channel gets.
+    let resp = ws_upgrade_request(&client, &format!("{base}/api/sessions/{}/ws", session.id))
+        .bearer_auth(TOKEN)
+        .send()
+        .await
+        .expect("ws upgrade request");
+    assert_eq!(
+        resp.status(),
+        StatusCode::SWITCHING_PROTOCOLS,
+        "a valid Bearer must upgrade the WS attach to 101"
+    );
+}
+
 // ---------------------------------------------------------------- TC-014
 
 #[tokio::test]
@@ -431,6 +455,246 @@ async fn delete_removes_the_session_and_its_state_dir() {
         resp.status(),
         StatusCode::NOT_FOUND,
         "fetching a deleted session must be 404"
+    );
+}
+
+// ---------------------------------------------------------------
+// `attention` on the session API: wire-only state over the
+// `Session` disk schema — a bell in pty output sets it on the
+// runtime, a WS attach acknowledges (clears) it, and
+// `session.json` never carries the key. The router is built
+// through the daemon's own `build_router_with` seam so the test
+// keeps the `RuntimeManager` the create route spawned into —
+// that manager is the only handle able to ring the live pty's
+// bell or observe the flag without the HTTP surface under test.
+// ---------------------------------------------------------------
+
+const ATTENTION_WAIT: Duration = Duration::from_secs(15);
+const ATTENTION_POLL: Duration = Duration::from_millis(50);
+
+/// A router plus the `RuntimeManager` it delegates to — `main`
+/// wires the same pair through `build_router_with` so one manager
+/// is shared; `build_router` hides the manager and would leave
+/// the test no way to raise attention on a live shell.
+async fn spawn_server_with_runtime(data_dir: &Path) -> (String, Arc<RuntimeManager>) {
+    let runtime = Arc::new(RuntimeManager::new(
+        data_dir.to_path_buf(),
+        DEFAULT_IDLE_ATTENTION,
+    ));
+    let app = crate::http::routes::build_router_with(
+        runtime.clone(),
+        data_dir.to_path_buf(),
+        TOKEN.to_string(),
+        None,
+        "127.0.0.1:4020".to_string(),
+    )
+    .expect("router must build over a fresh data dir");
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind loopback ephemeral port");
+    let base = format!("http://{}", listener.local_addr().expect("local addr"));
+    tokio::spawn(async move {
+        axum::serve(listener, app.into_make_service())
+            .await
+            .expect("serve");
+    });
+    (base, runtime)
+}
+
+/// Create a session the route actually spawned a shell for.
+/// Registry-level seeds have no runtime, so attention could
+/// never be raised on them.
+async fn create_live_session(client: &reqwest::Client, base: &str, cwd: &Path) -> String {
+    let resp = client
+        .post(format!("{base}/api/sessions"))
+        .bearer_auth(TOKEN)
+        .json(&json!({ "name": "ringer", "cmd": "sh", "cwd": cwd }))
+        .send()
+        .await
+        .expect("create request");
+    assert_eq!(
+        resp.status(),
+        StatusCode::CREATED,
+        "session create must succeed"
+    );
+    let body: Value = resp.json().await.expect("json body");
+    body["id"]
+        .as_str()
+        .expect("the created session carries an id")
+        .to_string()
+}
+
+/// `GET /api/sessions/{id}` decoded as JSON.
+async fn get_session_json(client: &reqwest::Client, base: &str, id: &str) -> Value {
+    let resp = client
+        .get(format!("{base}/api/sessions/{id}"))
+        .bearer_auth(TOKEN)
+        .send()
+        .await
+        .expect("get request");
+    assert_eq!(resp.status(), StatusCode::OK);
+    resp.json().await.expect("json body")
+}
+
+/// Poll the single-session GET until `attention` reads `want` —
+/// the flag is set by the manager's async monitor off the pty
+/// broadcast and cleared inside the WS route's `spawn_on_attach`.
+async fn wait_for_attention(client: &reqwest::Client, base: &str, id: &str, want: bool) {
+    tokio::time::timeout(ATTENTION_WAIT, async {
+        loop {
+            if get_session_json(client, base, id).await["attention"].as_bool() == Some(want) {
+                return;
+            }
+            tokio::time::sleep(ATTENTION_POLL).await;
+        }
+    })
+    .await
+    .unwrap_or_else(|_| panic!("timed out waiting for attention={want} on session {id}"));
+}
+
+/// Poll the manager's flag directly — the raise lands
+/// asynchronously off the pty broadcast, independent of the
+/// HTTP surface under test.
+async fn wait_for_runtime_attention(runtime: &RuntimeManager, id: &str, want: bool) {
+    tokio::time::timeout(ATTENTION_WAIT, async {
+        while runtime.attention(id) != want {
+            tokio::time::sleep(ATTENTION_POLL).await;
+        }
+    })
+    .await
+    .unwrap_or_else(|_| panic!("timed out waiting for the runtime attention flag on {id}"));
+}
+
+#[tokio::test]
+async fn session_responses_expose_attention_until_an_attach_acks_it() {
+    let data = TempDir::new().expect("tempdir");
+    let (base, runtime) = spawn_server_with_runtime(data.path()).await;
+    let client = reqwest::Client::new();
+    let id = create_live_session(&client, &base, data.path()).await;
+
+    // A fresh session needs no attention — the field is present
+    // and false on both the list and the single-session read.
+    let resp = client
+        .get(format!("{base}/api/sessions"))
+        .bearer_auth(TOKEN)
+        .send()
+        .await
+        .expect("list request");
+    assert_eq!(resp.status(), StatusCode::OK);
+    let list: Value = resp.json().await.expect("json body");
+    let entry = list
+        .as_array()
+        .expect("GET /api/sessions must return a JSON array")
+        .iter()
+        .find(|session| session["id"].as_str() == Some(id.as_str()))
+        .expect("the created session must be listed");
+    assert_eq!(
+        entry["attention"].as_bool(),
+        Some(false),
+        "GET /api/sessions must carry attention: false on a fresh session"
+    );
+    let body = get_session_json(&client, &base, &id).await;
+    assert_eq!(
+        body["attention"].as_bool(),
+        Some(false),
+        "GET /api/sessions/{{id}} must carry attention: false on a fresh session"
+    );
+
+    // A BEL byte in the shell's output is what flags attention on
+    // the runtime — write it into the live pty and the API must
+    // surface it on both reads.
+    let rt = runtime
+        .runtime(&id)
+        .expect("the create route leaves a live runtime");
+    rt.write_input(b"printf '\\a'\n").expect("ring the bell");
+    wait_for_attention(&client, &base, &id, true).await;
+
+    let resp = client
+        .get(format!("{base}/api/sessions"))
+        .bearer_auth(TOKEN)
+        .send()
+        .await
+        .expect("list request");
+    let list: Value = resp.json().await.expect("json body");
+    let flagged = list
+        .as_array()
+        .expect("GET /api/sessions must return a JSON array")
+        .iter()
+        .find(|session| session["id"].as_str() == Some(id.as_str()))
+        .expect("the created session must be listed");
+    assert_eq!(
+        flagged["attention"].as_bool(),
+        Some(true),
+        "GET /api/sessions must reflect the raised flag"
+    );
+
+    // Attaching over the WS route is the acknowledgement — the
+    // same read reports the flag cleared.
+    let url = format!(
+        "{}/api/sessions/{id}/ws?token={TOKEN}",
+        base.replacen("http://", "ws://", 1)
+    );
+    let (socket, resp) = tokio_tungstenite::connect_async(&url)
+        .await
+        .expect("the ws attach must be accepted");
+    assert_eq!(resp.status(), StatusCode::SWITCHING_PROTOCOLS);
+    drop(socket);
+    wait_for_attention(&client, &base, &id, false).await;
+}
+
+#[tokio::test]
+async fn attention_is_runtime_state_never_written_to_session_json() {
+    let data = TempDir::new().expect("tempdir");
+    let (base, runtime) = spawn_server_with_runtime(data.path()).await;
+    let client = reqwest::Client::new();
+    let id = create_live_session(&client, &base, data.path()).await;
+    let session_json = data
+        .path()
+        .join("sessions")
+        .join(&id)
+        .join("session.json");
+
+    // Raise the flag — verified on the manager so the raise
+    // itself cannot mask a missing API field — then confirm the
+    // wire read reports it while the disk record stays clean:
+    // `Session` is wire and disk schema in one, so the key may
+    // only live on the response DTO.
+    let rt = runtime
+        .runtime(&id)
+        .expect("the create route leaves a live runtime");
+    rt.write_input(b"printf '\\a'\n").expect("ring the bell");
+    wait_for_runtime_attention(&runtime, &id, true).await;
+
+    let body = get_session_json(&client, &base, &id).await;
+    assert_eq!(
+        body["attention"].as_bool(),
+        Some(true),
+        "the API must report the raised flag"
+    );
+    let raw = fs::read_to_string(&session_json)
+        .unwrap_or_else(|err| panic!("cannot read {}: {err}", session_json.display()));
+    let on_disk: Value = serde_json::from_str(&raw).expect("session.json must parse");
+    assert!(
+        on_disk.get("attention").is_none(),
+        "session.json must not persist runtime attention, got {raw}"
+    );
+
+    // After a daemon restart the file is reloaded untouched —
+    // still no key — and a fresh manager reports the flag unset:
+    // nothing was ever persisted to read back.
+    let restarted = spawn_server(data.path()).await;
+    let body = get_session_json(&client, &restarted, &id).await;
+    assert_eq!(
+        body["attention"].as_bool(),
+        Some(false),
+        "a restarted daemon has no persisted attention to report"
+    );
+    let raw = fs::read_to_string(&session_json)
+        .unwrap_or_else(|err| panic!("cannot read {}: {err}", session_json.display()));
+    let on_disk: Value = serde_json::from_str(&raw).expect("session.json must parse");
+    assert!(
+        on_disk.get("attention").is_none(),
+        "session.json must still lack the attention key after reload, got {raw}"
     );
 }
 
