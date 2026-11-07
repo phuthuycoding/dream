@@ -190,29 +190,57 @@ final class TerminalController {
         pendingFeed = Data()
     }
 
+    /// What `resumeIfNeeded` does for a settled phase — pure and
+    /// internal so the foreground-resume rules are pinned without a
+    /// socket.
+    enum ResumeAction: Equatable {
+        /// Nothing to do: a classified failure owns its overlay, or an
+        /// in-flight/ended attach must not be superseded.
+        case skip
+        /// `.disconnected` — start a fresh bounded series (attempt
+        /// counter resets).
+        case reattachNow
+        /// `.reconnecting` — run the already-scheduled attempt early;
+        /// the counter keeps its place.
+        case fastPathRetry
+    }
+
+    /// The pure resume decision: a classified 401/404
+    /// (`reconnectSuppressed`) owns its overlay — reattaching loops the
+    /// same rejection. `.connecting`/`.live`/`.ended` are untouched —
+    /// superseding an in-flight handshake would waste it.
+    /// `.reconnecting` fast-paths the already-scheduled attempt (a
+    /// delay chosen for a network that may already be back shouldn't
+    /// keep the user waiting); `.disconnected` starts a fresh bounded
+    /// series.
+    static func resumeAction(for phase: Phase, reconnectSuppressed: Bool) -> ResumeAction {
+        if reconnectSuppressed { return .skip }
+        switch phase {
+        case .connecting, .live, .ended:
+            return .skip
+        case .reconnecting:
+            return .fastPathRetry
+        case .disconnected:
+            return .reattachNow
+        }
+    }
+
     /// Foreground return (scenePhase → .active): iOS suspends sockets in
     /// the background, so a settled transport drop gets a fresh socket
-    /// now — no backoff wait while the user is watching. `.disconnected`
-    /// starts a fresh bounded series; `.reconnecting` fast-paths the
-    /// already-scheduled attempt (a delay chosen for a network that may
-    /// already be back shouldn't keep the user waiting). A
-    /// `.connecting`/`.live`/`.ended` attach is untouched — superseding
-    /// an in-flight handshake would waste it — and a classified 401/404
-    /// (`reconnectSuppressed`) owns its overlay: reattaching loops the
-    /// same rejection.
+    /// now — no backoff wait while the user is watching. The decision
+    /// itself is `resumeAction(for:reconnectSuppressed:)`.
     func resumeIfNeeded() {
-        guard !reconnectSuppressed else { return }
-        switch phase {
-        case .disconnected:
+        switch Self.resumeAction(for: phase, reconnectSuppressed: reconnectSuppressed) {
+        case .skip:
+            break
+        case .reattachNow:
             reconnectAttempt = 0
             attach()
-        case .reconnecting:
+        case .fastPathRetry:
             // attach() cancels the pending reconnectTask itself; the
             // attempt counter keeps its place — this is the scheduled
             // retry run early, not a new series.
             attach()
-        case .connecting, .live, .ended:
-            break
         }
     }
 
