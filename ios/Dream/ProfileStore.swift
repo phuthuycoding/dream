@@ -126,6 +126,21 @@ final class ProfileStore {
             .appendingPathComponent("profiles.json")
     }
 
+    /// An existing file that won't decode is always corrupt for this
+    /// store — there is no partial-decode recovery — so `load()` always
+    /// tries to move it aside before starting empty. Pure and internal
+    /// so the quarantine rule is pinned without touching disk.
+    static func shouldQuarantine(decodeError _: Error) -> Bool {
+        true
+    }
+
+    /// Where an undecodable file is moved: a sibling carrying a
+    /// `corrupt-<unix-timestamp>` extension, so a second corruption
+    /// never overwrites a previous quarantine.
+    static func quarantineURL(for fileURL: URL, at date: Date) -> URL {
+        fileURL.appendingPathExtension("corrupt-\(Int(date.timeIntervalSince1970))")
+    }
+
     private func load() {
         guard let data = try? Data(contentsOf: fileURL) else {
             return // first launch — nothing persisted yet
@@ -139,9 +154,8 @@ final class ProfileStore {
             // starts empty — the next save/write would otherwise
             // overwrite it and orphan the Keychain tokens of every
             // profile it held.
-            let quarantined = fileURL.appendingPathExtension(
-                "corrupt-\(Int(Date().timeIntervalSince1970))"
-            )
+            guard Self.shouldQuarantine(decodeError: error) else { return }
+            let quarantined = Self.quarantineURL(for: fileURL, at: Date())
             do {
                 try FileManager.default.moveItem(at: fileURL, to: quarantined)
                 NSLog("ProfileStore: quarantined undecodable profile file as \(quarantined.lastPathComponent): \(error)")

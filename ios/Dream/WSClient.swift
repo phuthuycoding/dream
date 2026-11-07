@@ -91,8 +91,8 @@ final class WSClient: NSObject {
     /// Last proof the peer is alive: a received frame or an answered
     /// pong. The daemon sends nothing on an idle session, so data
     /// frames alone can't stand in for liveness — the pong stamps it
-    /// too. Armed by the first completed receive.
-    private var lastReceiveAt = Date.distantPast
+    /// too. nil until the first completed receive arms it.
+    private var lastReceiveAt: Date?
     /// Keepalive cadence, in seconds.
     private static let pingInterval: TimeInterval = 15
     /// Silence past ~2 ping intervals means a half-open socket: the
@@ -145,6 +145,16 @@ final class WSClient: NSObject {
         // and kill a handshake that was about to succeed.
     }
 
+    /// The half-open rule the ping timer applies: silence longer than
+    /// `window` since the last proof of life means the socket is dead.
+    /// nil — no receive has completed yet — is not stale: the watchdog
+    /// only makes sense once the upgrade has proven live. Pure and
+    /// internal so the >31s kill rule is pinned without a socket.
+    static func isStale(lastReceiveAt: Date?, at now: Date, window: TimeInterval) -> Bool {
+        guard let lastReceiveAt else { return false }
+        return now.timeIntervalSince(lastReceiveAt) > window
+    }
+
     /// ~15s keepalive — silent stalls (a suspend or a dead route) are
     /// reported through the pong error and the `lastReceiveAt`
     /// watchdog, not left hanging forever. Armed by the first
@@ -161,7 +171,11 @@ final class WSClient: NSObject {
             // errors only — a route that takes the bytes but answers
             // nothing back would stay `.live` forever. Two intervals
             // without a frame or a pong is dead.
-            if -self.lastReceiveAt.timeIntervalSinceNow > Self.livenessWindow {
+            if Self.isStale(
+                lastReceiveAt: self.lastReceiveAt,
+                at: Date(),
+                window: Self.livenessWindow
+            ) {
                 self.finish(error: URLError(.networkConnectionLost))
                 return
             }

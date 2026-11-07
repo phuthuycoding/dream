@@ -234,7 +234,10 @@ final class TerminalController {
             } catch APIError.unauthorized(let token) {
                 // A rejected respawn must not leave the connecting
                 // spinner up forever — land on the same terminal phase
-                // a handshake 401 reports.
+                // a handshake 401 reports, suppressing reconnect like
+                // didUnauthorized so a foreground resume doesn't loop
+                // the same rejection.
+                reconnectSuppressed = true
                 phase = .disconnected(APIError.unauthorized(token: token).userMessage)
                 onUnauthorized(token)
             } catch {
