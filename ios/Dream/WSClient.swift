@@ -146,6 +146,12 @@ final class WSClient: NSObject {
                 // Text frames are not in the protocol — drop, keep reading.
                 self.receiveNext()
             case .failure(let error):
+                // A rejected upgrade also fails the pending receive, and
+                // that error can land before didCompleteWithError —
+                // classify it here too so whichever teardown signal
+                // arrives first routes 401/404; the later one is
+                // `!finished`-guarded.
+                self.classifyUpgradeFailure(of: self.task)
                 self.finish(error: error)
             }
         }
@@ -182,6 +188,19 @@ final class WSClient: NSObject {
         pendingOutput.removeAll()
         for chunk in chunks {
             onOutput(chunk)
+        }
+    }
+
+    /// The HTTP status a failed upgrade leaves on `task.response` —
+    /// 401 routes to re-pair, 404 names the dead session. Runs before
+    /// `finish` on the receive-error and delegate paths alike, so the
+    /// first teardown signal to land classifies; a live socket's plain
+    /// drop (nil or 101 response) falls through to `default`.
+    private func classifyUpgradeFailure(of task: URLSessionTask?) {
+        switch (task?.response as? HTTPURLResponse)?.statusCode {
+        case 401: onUnauthorized()
+        case 404: onSessionGone()
+        default: break
         }
     }
 
@@ -222,12 +241,10 @@ extension WSClient: URLSessionWebSocketDelegate {
         guard !finished else { return }
         // A failed upgrade carries the HTTP status on task.response —
         // classify it before the generic close so 401 routes to re-pair
-        // and 404 names the dead session instead of a bare error.
-        switch (task.response as? HTTPURLResponse)?.statusCode {
-        case 401: onUnauthorized()
-        case 404: onSessionGone()
-        default: break
-        }
+        // and 404 names the dead session instead of a bare error. The
+        // receive-error path classifies too, so this may be the second
+        // signal — the first one already ran and set `finished`.
+        classifyUpgradeFailure(of: task)
         finish(error: error)
     }
 }

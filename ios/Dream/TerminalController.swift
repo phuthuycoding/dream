@@ -258,11 +258,14 @@ final class TerminalController {
 
     /// Applies one `s` payload the way the web client does: resize the
     /// emulator to the dump's geometry first (its cells map 1:1 onto the
-    /// screen), then replay the buffered scrollback, then the snapshot.
-    /// The payload's leading `\x1bc` (RIS) is dropped — fed after the
-    /// scrollback it would reset the whole emulator and discard the
-    /// replay just restored. The dump still repaints every cell, so a
-    /// mid-stream snapshot remains the resync path.
+    /// screen), reset it, then replay the buffered scrollback, then the
+    /// snapshot. The payload's leading `\x1bc` (RIS) is fed ahead of the
+    /// replay — it is what clears the modes a previous attach may have
+    /// left (DECSTBM, DECOM, charset shifts, alt-screen), so scrollback
+    /// and dump repaint into a clean emulator instead of a stale scroll
+    /// region or the alt buffer. Fed after the scrollback it would
+    /// instead discard the replay just restored, which is why
+    /// `strippingLeadingRIS` removes it from the payload itself.
     private func applySnapshot(scrollback: [Data], payload: Data) {
         guard let view = terminalView else { return }
         drainPendingFeed()
@@ -270,6 +273,9 @@ final class TerminalController {
             // resize() reports back through sizeChanged → the `r` frame
             // the protocol asks for after a snapshot goes out there.
             view.resize(cols: geometry.cols, rows: geometry.rows)
+        }
+        if payload.starts(with: Self.ris) {
+            view.feed(byteArray: ArraySlice(Self.ris))
         }
         for chunk in scrollback {
             view.feed(byteArray: ArraySlice(chunk))
@@ -281,13 +287,18 @@ final class TerminalController {
         phase = .live
     }
 
-    /// Drop the snapshot's leading `\x1bc` (RIS): SwiftTerm's reset
-    /// replaces the whole buffer, which would wipe the scrollback fed
-    /// just before it. The rest of the payload — geometry marker, the
-    /// DEC-2026-wrapped dump, mode restores — still applies; a leading
-    /// `\x1b[!p` soft reset is kept since it clears modes, not cells.
+    /// `ESC c` — the full reset `src/vt/snapshot.rs` build() writes as
+    /// the snapshot's first bytes.
+    private static let ris: [UInt8] = [0x1B, 0x63]
+
+    /// Drop the snapshot's leading `\x1bc` (RIS) from the payload:
+    /// `applySnapshot` already feeds that reset itself, ahead of the
+    /// scrollback replay — left in place it would run a second time
+    /// after the replay and wipe the scrollback just restored. The
+    /// remainder — geometry marker, DEC-2026-wrapped dump, mode
+    /// restores — still applies. A payload without a leading RIS
+    /// passes through unchanged.
     static func strippingLeadingRIS(_ payload: Data) -> Data {
-        let ris: [UInt8] = [0x1B, 0x63] // ESC c
         guard payload.starts(with: ris) else { return payload }
         return payload.dropFirst(ris.count)
     }
