@@ -267,6 +267,12 @@ struct SessionListView: View {
     /// before the first list, so a miss re-lists once before the
     /// dead-session notice.
     private func drainRequest() {
+        // A banner raised by another profile's daemon is left queued —
+        // its session id means nothing on this list, and the profile it
+        // belongs to drains it when it becomes active.
+        if let notifier = attentionCenter.requestedProfileID, notifier != profile.id {
+            return
+        }
         guard let id = attentionCenter.consumeRequest() else { return }
         Task {
             if sessions.first(where: { $0.id == id }) == nil {

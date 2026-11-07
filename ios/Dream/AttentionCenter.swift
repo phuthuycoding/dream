@@ -16,6 +16,10 @@ final class AttentionCenter: NSObject {
     /// Session id a notification tap asked to open — set by the
     /// delegate, drained by the session list via `consumeRequest()`.
     private(set) var requestedSessionID: String?
+    /// Profile the tapped banner was posted for — a tap that lands
+    /// after a profile switch must not be consumed by the wrong
+    /// daemon's list (its session id would mean nothing there).
+    private(set) var requestedProfileID: UUID?
     /// Session whose terminal is on screen right now. Its own edge is
     /// suppressed: the attach already acknowledged the flag.
     @ObservationIgnored var foregroundedSessionID: String?
@@ -69,7 +73,7 @@ final class AttentionCenter: NSObject {
         }
         for session in sessions where session.attention && !flagged.contains(session.id) {
             if session.id != foregroundedSessionID {
-                notify(session)
+                notify(session, for: profileID)
             }
         }
         let cleared = Array(flagged.subtracting(now))
@@ -82,16 +86,22 @@ final class AttentionCenter: NSObject {
 
     /// Returns and clears the pending deep-link, if any.
     func consumeRequest() -> String? {
-        defer { requestedSessionID = nil }
+        defer {
+            requestedSessionID = nil
+            requestedProfileID = nil
+        }
         return requestedSessionID
     }
 
-    private func notify(_ session: DreamSession) {
+    private func notify(_ session: DreamSession, for profileID: UUID) {
         let content = UNMutableNotificationContent()
         content.title = "\"\(session.name)\" wants attention"
         content.body = session.cmd
         content.sound = .default
-        content.userInfo = [attentionSessionIDKey: session.id]
+        content.userInfo = [
+            attentionSessionIDKey: session.id,
+            attentionProfileIDKey: profileID.uuidString,
+        ]
         // A nil trigger delivers immediately; the request identifier is
         // the session id so a re-flag replaces rather than stacks.
         let request = UNNotificationRequest(identifier: session.id, content: content, trigger: nil)
@@ -103,9 +113,11 @@ final class AttentionCenter: NSObject {
     }
 }
 
-/// `userInfo` key carrying the session id in attention notifications —
-/// file scope so the nonisolated delegate can read it.
+/// `userInfo` keys carrying the session id and owning profile id in
+/// attention notifications — file scope so the nonisolated delegate
+/// can read them.
 private let attentionSessionIDKey = "sessionID"
+private let attentionProfileIDKey = "profileID"
 
 extension AttentionCenter: UNUserNotificationCenterDelegate {
     /// Attention banners also present while the app is foreground —
@@ -125,9 +137,12 @@ extension AttentionCenter: UNUserNotificationCenterDelegate {
         didReceive response: UNNotificationResponse,
         withCompletionHandler completionHandler: @escaping () -> Void
     ) {
-        let sessionID = response.notification.request.content.userInfo[attentionSessionIDKey] as? String
+        let userInfo = response.notification.request.content.userInfo
+        let sessionID = userInfo[attentionSessionIDKey] as? String
+        let profileID = (userInfo[attentionProfileIDKey] as? String).flatMap(UUID.init(uuidString:))
         Task { @MainActor in
             self.requestedSessionID = sessionID
+            self.requestedProfileID = profileID
             completionHandler()
         }
     }
